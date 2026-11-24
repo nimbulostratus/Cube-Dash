@@ -1,0 +1,5259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Cube Dash</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #121212;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+        }
+        canvas {
+            box-shadow: 0 0 25px rgba(0, 0, 0, 0.8);
+            border: 2px solid #333;
+            width: min(100vw, calc(100vh * (4 / 3)));
+            height: min(100vh, calc(100vw * (3 / 4)));
+            display: block;
+			image-rendering: pixelated;
+        }
+		#fullscreenBtn {
+            position: fixed;
+            top: 14px;
+            right: 14px;
+            padding: 8px 14px;
+            font-family: Verdana, sans-serif;
+            font-size: 13px;
+            font-weight: bold;
+            background-color: saddlebrown;
+            color: moccasin;
+            border: 2px solid moccasin;
+            border-radius: 6px;
+            cursor: pointer;
+            z-index: 100;
+            opacity: 0.85;
+            transition: opacity 0.2s, transform 0.1s;
+        }
+        #fullscreenBtn:hover {
+            opacity: 1;
+            transform: scale(1.05);
+        }
+    </style>
+</head>
+<body>
+    <button id="fullscreenBtn" onclick="toggleFullscreen()">⛶ FULLSCREEN (F)</button>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        let _objects = [];
+        let _timers = new Map();
+
+        function setSize(w, h) { canvas.width = w; canvas.height = h; }
+        function getWidth() { return canvas.width; }
+        function getHeight() { return canvas.height; }
+
+        function add(obj) {
+            if (!_objects.includes(obj)) _objects.push(obj);
+        }
+        function remove(obj) {
+            const idx = _objects.indexOf(obj);
+            if (idx > -1) _objects.splice(idx, 1);
+        }
+
+        function setTimer(fn, delay) {
+            stopTimer(fn);
+            const id = setInterval(fn, delay);
+            _timers.set(fn, id);
+            return id;
+        }
+        function stopTimer(fn) {
+            if (_timers.has(fn)) {
+                clearInterval(_timers.get(fn));
+                _timers.delete(fn);
+            }
+        }
+
+        function keyDownMethod(fn) {
+            window.addEventListener("keydown", (e) => {
+                if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(e.key)) {
+                    e.preventDefault(); // Stops arrow keys & spacebar from scrolling the browser
+                }
+                fn(e);
+            });
+        }
+        function keyUpMethod(fn) { window.addEventListener("keyup", fn); }
+
+        function mouseClickMethod(fn) {
+            canvas.addEventListener("click", (e) => {
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                fn({
+                    getX: () => (e.clientX - rect.left) * scaleX,
+                    getY: () => (e.clientY - rect.top) * scaleY
+                });
+            });
+        }
+
+        class GObject {
+            constructor() { this.x = 0; this.y = 0; this.color = "black"; this.layer = 1; }
+            setPosition(x, y) { this.x = x; this.y = y; }
+            getX() { return this.x; }
+            getY() { return this.y; }
+            setColor(c) { this.color = c; }
+            getColor() { return this.color; }
+        }
+
+        class Rectangle extends GObject {
+            constructor(w, h) { super(); this.w = w; this.h = h; }
+            getWidth() { return this.w; }
+            getHeight() { return this.h; }
+            getType() { return "Rectangle"; }
+            draw() {
+                ctx.fillStyle = this.color;
+                ctx.fillRect(this.x, this.y, this.w, this.h);
+            }
+        }
+
+        class Circle extends GObject {
+            constructor(r) { super(); this.r = r; }
+            getRadius() { return this.r; }
+            getType() { return "Circle"; }
+            draw() {
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        class Text extends GObject {
+            constructor(text, font) { super(); this.text = text; this.font = font; }
+            setText(t) { this.text = t; }
+            getWidth() {
+                ctx.font = this.font;
+                return ctx.measureText(this.text).width;
+            }
+            getType() { return "Text"; }
+            draw() {
+                ctx.font = this.font;
+                ctx.fillStyle = this.color;
+                ctx.fillText(this.text, this.x, this.y);
+            }
+        }
+
+        // Render loop that sorts by .layer just like CodeHS
+        function _renderLoop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const sorted = [..._objects].sort((a, b) => (a.layer || 0) - (b.layer || 0));
+            for (const obj of sorted) obj.draw();
+            requestAnimationFrame(_renderLoop);
+        }
+        requestAnimationFrame(_renderLoop);
+		
+		 function toggleFullscreen() {
+            const btn = document.getElementById("fullscreenBtn");
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch((err) => {
+                    console.log("Fullscreen blocked:", err);
+                });
+            } else {
+                document.exitFullscreen();
+            }
+        }
+
+        // Update button text automatically when entering/exiting fullscreen (even via Esc)
+        document.addEventListener("fullscreenchange", () => {
+            const btn = document.getElementById("fullscreenBtn");
+            btn.textContent = document.fullscreenElement ? "✕ EXIT FULLSCREEN (F)" : "⛶ FULLSCREEN (F)";
+        });
+		
+setSize(800, 600);
+// Sorry for this absolute mess of variables, i said i was gonna fix it but i dont want to.
+
+// Holds variables for the title screen and world select screen.
+let DEBUG_LEVEL = null;
+let GAME_STATE = "TITLE";
+const TOTAL_WORLDS = 18;
+const LEVELS_PER_WORLD = 9;
+let unlockedWorlds = 1;
+let currentWorld = 1;
+let uiElements = [];
+let worldButtons = [];
+
+// Holds variables for the player and player speed.
+const PLAYER_SIZE = 18;
+let SPEED = 3.5;
+const DASH_SPEED = 10;
+const DASH_DURATION = 150;
+const DASH_COOLDOWN = 600;
+
+
+// holds default variables for the colors on screen.
+let background;
+let BACKGROUND_COLOR = "sienna";
+let WALL_COLOR = "saddlebrown";
+let PLAYER_COLOR = "peru"
+let OBSTACLE_COLOR = "crimson";
+let DOOR_COLOR = "chocolate";
+let GUI_COLOR = "moccasin";
+let doors = [];
+let level = 0;
+let levelText;
+
+// This is where the player spawns in on the screen.
+let spawnX = 40;
+let spawnY = (getHeight() / 2) - PLAYER_SIZE / 2;
+
+// Holds variables for player movement.
+let player;
+let curPlayerX, curPlayerY, playerDirection = false;
+let movingLeft = false;
+let movingRight = false;
+let movingUp = false;
+let movingDown = false;
+let isDash = false;
+let canDash = true;
+let isInvulnerable = false;
+let invulnBlinkInterval = null;
+
+// Holds variables for HP.
+let hpText, timeText;
+let MAX_HP = 3;
+let TITLE_CARD = 1000;
+let hp = MAX_HP;
+
+// Holds objects on screen, and keeps track of levels.
+let walls = [];
+let obstacles = [];
+let wall, obstacle;
+let levels = [
+    W1L1, W1L2, W1L3, W1L4, W1L5, W1L6, W1L7, W1L8, W1L9,
+    W2L1, W2L2, W2L3, W2L4, W2L5, W2L6, W2L7, W2L8, W2L9,
+    W3L1, W3L2, W3L3, W3L4, W3L5, W3L6, W3L7, W3L8, W3L9,
+    W4L1, W4L2, W4L3, W4L4, W4L5, W4L6, W4L7, W4L8, W4L9,
+    W5L1, W5L2, W5L3, W5L4, W5L5, W5L6, W5L7, W5L8, W5L9,
+	W6L1, W6L2, W6L3, W6L4, W6L5, W6L6, W6L7, W6L8, W6L9,
+	W7L1, W7L2, W7L3, W7L4, W7L5, W7L6, W7L7, W7L8, W7L9
+    ];
+let hazardWall = null;
+let hazardWallSpeed = 0;
+let editorTracks = [];
+let activeTrackIdx = -1;
+let editorLastTrackSpeed = 2.0;
+
+const TILE_SIZE = 40;
+
+// Holds stopwatch data like current amount of time that has passed.
+let stopwatch = null;
+let startTime = 0;
+let elapsedTime = 0;
+let isRunning = false;
+
+// Holds data about all of the power ups and their side effects.
+let items = [];
+let keys = [];
+let fakeKeys = [];
+let lockedDoors = [];
+const LOCK_COLOR = "gold";
+const FAKE_KEY_COLOR = "orangeRed";
+let timeFrozen = false;
+let speedBoost = false;
+const BOOST_SPEED = 7;
+let isPaused = false;
+let pauseElements = [];
+let pauseButtons = [];
+let timeFreezeTimeout = null;
+let speedBoostTimeout = null;
+
+// Colors for all the objects on screen and how they change throughout the game.
+const WORLD_THEMES = {
+    1: { bg: "sienna",           wall: "saddlebrown",    player: "peru",           door: "chocolate",        gui: "moccasin" },
+    2: { bg: "lightsteelblue",   wall: "lightcyan",      player: "dodgerblue",     door: "paleturquoise",    gui: "hotpink" },
+    3: { bg: "darkolivegreen",   wall: "darkgreen",      player: "yellowgreen",    door: "mediumseagreen",   gui: "palegreen" },
+    4: { bg: "indigo",           wall: "rebeccapurple",  player: "violet",         door: "mediumpurple",     gui: "lavender" },
+    5: { bg: "darkred",          wall: "#1c0000",        player: "gold",           door: "coral",            gui: "mistyrose" },
+    6: { bg: "teal",             wall: "darkslategray",  player: "aquamarine",     door: "mediumturquoise",  gui: "lightcyan" },
+    7: { bg: "midnightblue",     wall: "navy",           player: "deepskyblue",    door: "royalblue",        gui: "aliceblue" },
+    8: { bg: "goldenrod",        wall: "darkgoldenrod",  player: "lemonchiffon",   door: "khaki",            gui: "white" },
+    9: { bg: "dimgray",          wall: "darkslategray",  player: "silver",         door: "lightgray",        gui: "white" },
+    10: { bg: "darkmagenta",     wall: "purple",         player: "hotpink",        door: "orchid",           gui: "pink" },
+    11: { bg: "seagreen",        wall: "darkslategray",  player: "springgreen",    door: "mediumaquamarine", gui: "honeydew" },
+    12: { bg: "darkslateblue",   wall: "midnightblue",   player: "cornflowerblue", door: "slateblue",        gui: "lavenderblush" },
+    13: { bg: "chocolate",       wall: "firebrick",      player: "sandybrown",     door: "tan",              gui: "cornsilk" },
+    14: { bg: "darkcyan",        wall: "teal",           player: "cyan",           door: "turquoise",        gui: "azure" },
+    15: { bg: "olive",           wall: "darkolivegreen", player: "greenyellow",    door: "yellowgreen",      gui: "lightyellow" },
+    16: { bg: "mediumvioletred", wall: "darkmagenta",    player: "lightpink",      door: "palevioletred",    gui: "seashell" },
+    17: { bg: "#1c1c1c",         wall: "#383838",        player: "white",          door: "silver",           gui: "gainsboro" },
+    18: { bg: "#1a1200",         wall: "darkgoldenrod",  player: "gold",           door: "khaki",            gui: "lightgoldenrodyellow" },
+};
+
+const DEFAULT_THEME = { bg: "sienna", wall: "saddlebrown", player: "peru", door: "chocolate", gui: "moccasin" };
+
+let bestTimes = {};
+
+function main() {
+    loadSaveData();
+    initBackground();
+	
+		if (DEBUG_LEVEL != null) {
+        // Automatically detects the world number from the function name (e.g., W5L1 -> World 5)
+        let match = DEBUG_LEVEL.name.match(/^W(\d+)/);
+        let worldNum = match ? parseInt(match[1]) : 1;
+        startDebugLevel(DEBUG_LEVEL, worldNum);
+    } else {
+        titleScreen();
+    }
+	
+    setTimer(playerMove, 10);
+    setTimer(run, 10);
+	keyDownMethod(playerDirCheck);
+	keyUpMethod(playerStopCheck);
+	mouseClickMethod(handleMouseClick);
+}
+
+// Checks if you have any save data and pulls it from your cache.
+function loadSaveData() {
+    let savedWorlds = localStorage.getItem("cubeDash_unlockedWorlds");
+    if (savedWorlds) {
+        unlockedWorlds = parseInt(savedWorlds);
+    }
+    let savedTimes = localStorage.getItem("cubeDash_bestTimes");
+    if (savedTimes) {
+        bestTimes = JSON.parse(savedTimes);
+    }
+}
+
+// This is your save data for your best times and worlds unlocked, being uploaded to your account.
+function saveGameData() {
+    localStorage.setItem("cubeDash_unlockedWorlds", unlockedWorlds);
+    localStorage.setItem("cubeDash_bestTimes", JSON.stringify(bestTimes));
+}
+
+// This turns your best times on each world into a file on your account.
+function formatTime(ms) {
+    if (!ms) return "--:--.--";
+    let minutes = Math.floor((ms / (1000 * 60)) % 60);
+    let seconds = Math.floor((ms / 1000) % 60);
+    let centiseconds = Math.floor((ms % 1000) / 10);
+    return (minutes < 10 ? "0" : "") + minutes + ":" + (seconds < 10 ? "0" : "") + seconds + "." + (centiseconds < 10 ? "0" : "") + centiseconds;
+}
+
+// This clears the title and select screens.
+function clearMenuUI() {
+    for (let i = 0; i < uiElements.length; i++) {
+        remove(uiElements[i]);
+    }
+    uiElements = [];
+    worldButtons = [];
+}
+
+// This hides the main levels so you dont see them when selecting a world to play.
+function hideGameplayUI() {
+    if (player) { remove(player); player = null; }
+    if (hpText) { remove(hpText); hpText = null; }
+    if (levelText) { remove(levelText); levelText = null; }
+    if (timeText) { remove(timeText); timeText = null; }
+	if (invulnBlinkInterval) { clearInterval(invulnBlinkInterval); invulnBlinkInterval = null; }
+}
+
+// This is the title screen, with the logo, subtitle, and the play button.
+function titleScreen() {
+    GAME_STATE = "TITLE";
+    stopStopwatch();
+    clearLevel();
+    hideGameplayUI();
+    clearMenuUI();
+    
+    background.setColor("sienna");
+    
+    let title = new Text("CUBE DASH", "44pt Verdana");
+    title.setPosition((getWidth() - title.getWidth()) / 2, 200);
+    title.setColor("moccasin");
+    title.layer = 5;
+    add(title);
+    uiElements.push(title);
+    
+    let subtitle = new Text("by Lucas Payant, inspired by Marble Blast and Just Shapes and Beats", "16pt Verdana");
+    subtitle.setPosition((getWidth() - subtitle.getWidth()) / 2, 245);
+    subtitle.setColor("peru");
+    subtitle.layer = 5;
+    add(subtitle);
+    uiElements.push(subtitle);
+    
+    let btnW = 200;
+    let btnH = 65;
+    let gap = 25;
+    let startX = (getWidth() - (btnW * 2 + gap)) / 2;
+    let btnY = 310;
+    
+    // PLAY BUTTON
+    let playButton = new Rectangle(btnW, btnH);
+    playButton.setPosition(startX, btnY);
+    playButton.setColor("saddlebrown");
+    playButton.layer = 5;
+    add(playButton);
+    uiElements.push(playButton);
+    
+    let playText = new Text("PLAY", "20pt Verdana");
+    playText.setPosition(startX + (btnW - playText.getWidth()) / 2, btnY + 42);
+    playText.setColor("moccasin");
+    playText.layer = 6;
+    add(playText);
+    uiElements.push(playText);
+    
+    worldButtons.push({
+        x: startX,
+        y: btnY,
+        w: btnW,
+        h: btnH,
+        action: "OPEN_WORLD_SELECT"
+    });
+
+    // LEVEL EDITOR BUTTON
+    let edX = startX + btnW + gap;
+    let editorButton = new Rectangle(btnW, btnH);
+    editorButton.setPosition(edX, btnY);
+    editorButton.setColor("chocolate");
+    editorButton.layer = 5;
+    add(editorButton);
+    uiElements.push(editorButton);
+    
+    let editorText = new Text("EDITOR", "20pt Verdana");
+    editorText.setPosition(edX + (btnW - editorText.getWidth()) / 2, btnY + 42);
+    editorText.setColor("moccasin");
+    editorText.layer = 6;
+    add(editorText);
+    uiElements.push(editorText);
+    
+    worldButtons.push({
+        x: edX,
+        y: btnY,
+        w: btnW,
+        h: btnH,
+        action: "OPEN_EDITOR"
+    });
+}
+
+
+// This is the world select screen, with all 18 worlds, and their colors. Also shows worlds unlocked as well as your best time on all of them. This also combines your best time throughout all of the worlds in the game.
+function showWorldSelect() {
+    GAME_STATE = "WORLD_SELECT";
+    stopStopwatch();
+    clearLevel();
+    hideGameplayUI();
+    clearMenuUI();
+    
+    background.setColor("sienna");
+    
+    let header = new Text("World Select", "28pt Verdana");
+    header.setPosition((getWidth() - header.getWidth()) / 2, 70);
+    header.setColor("moccasin");
+    header.layer = 5;
+    add(header);
+    uiElements.push(header);
+    
+    let sub = new Text("Unlocked: " + unlockedWorlds + " / " + TOTAL_WORLDS + "   |   Total Best Time: " + getTotalBestTime() + "   (press esc to return)", "11pt Verdana");
+    sub.setPosition((getWidth() - sub.getWidth()) / 2, 100);
+    sub.setColor("peru");
+    sub.layer = 5;
+    add(sub);
+    uiElements.push(sub);
+    
+    let columns = 6;
+    let btnW = 95;
+    let btnH = 95;
+    let gapX = 20;
+    let gapY = 25;
+    let totalGridW = (columns * btnW) + ((columns - 1) * gapX);
+    let startX = (getWidth() - totalGridW) / 2;
+    let startY = 140;
+    
+    for (let w = 1; w <= TOTAL_WORLDS; w++) {
+        let index = w - 1;
+        let column = index % columns;
+        let row = Math.floor(index / columns);
+        
+        let bx = startX + column * (btnW + gapX);
+        let by = startY + row * (btnH + gapY);
+        let isUnlocked = w <= unlockedWorlds;
+        let theme = WORLD_THEMES[w] || DEFAULT_THEME;
+        
+        let box = new Rectangle(btnW, btnH);
+        box.setPosition(bx, by);
+        box.setColor(isUnlocked ? theme.wall : "#3b2314");
+        box.layer = 5;
+        add(box);
+        uiElements.push(box);
+        
+        let numLabel = new Text("World " + w, "14pt Verdana");
+        numLabel.setPosition(bx + (btnW - numLabel.getWidth()) / 2, by + 45);
+        numLabel.setColor(isUnlocked ? theme.gui : "#7a5c49");
+        numLabel.layer = 6;
+        add(numLabel);
+        uiElements.push(numLabel);
+        
+        let statusLabel = new Text(isUnlocked ? "SELECT" : "LOCKED", "10pt Verdana");
+        statusLabel.setPosition(bx + (btnW - statusLabel.getWidth()) / 2, by + 75);
+        statusLabel.setColor(isUnlocked ? "gold" : "#7a5c49");
+        statusLabel.layer = 6;
+        add(statusLabel);
+        uiElements.push(statusLabel);
+        
+        let timeStr = isUnlocked ? formatTime(bestTimes[w]) : "";
+        let bestLabel = new Text(timeStr, "9pt Verdana");
+        bestLabel.setPosition(bx + (btnW - bestLabel.getWidth()) / 2, by + 60);
+        bestLabel.setColor(theme.gui);
+        bestLabel.layer = 6;
+        add(bestLabel);
+        uiElements.push(bestLabel);
+        
+        if (isUnlocked) {
+            worldButtons.push({
+                x: bx,
+                y: by,
+                w: btnW,
+                h: btnH,
+                action: "START_WORLD",
+                worldNum: w
+            });
+        }
+    }
+    
+    let backW = 120;
+    let backH = 40;
+    let backX = (getWidth() / 2) - 165;
+    let backY = 520;
+    
+    let backButton = new Rectangle(backW, backH);
+    backButton.setPosition(backX, backY);
+    backButton.setColor("saddlebrown");
+    backButton.layer = 5;
+    add(backButton);
+    uiElements.push(backButton);
+    
+    let backText = new Text("BACK", "18pt Verdana");
+    backText.setPosition(backX + (backW - backText.getWidth()) / 2, backY + 27);
+    backText.setColor("moccasin");
+    backText.layer = 6;
+    add(backText);
+    uiElements.push(backText);
+    
+    worldButtons.push({
+        x: backX,
+        y: backY,
+        w: backW,
+        h: backH,
+        action: "BACK_TO_TITLE",
+    });
+    
+    let resetW = 170;
+    let resetH = 40;
+    let resetX = (getWidth() / 2) + 15;
+    let resetY = 520;
+    
+    let resetButton = new Rectangle(resetW, resetH);
+    resetButton.setPosition(resetX, resetY);
+    resetButton.setColor("crimson");
+    resetButton.layer = 5;
+    add(resetButton);
+    uiElements.push(resetButton);
+    
+    let resetText = new Text("RESET SAVE DATA", "12pt Verdana");
+    resetText.setPosition(resetX + (resetW - resetText.getWidth()) / 2, resetY + 27);
+    resetText.setColor("moccasin");
+    resetText.layer = 6;
+    add(resetText);
+    uiElements.push(resetText);
+    
+    worldButtons.push({
+        x: resetX,
+        y: resetY,
+        w: resetW,
+        h: resetH,
+        action: "RESET_SAVE",
+    });
+}
+
+function handleMouseClick(e) {
+    let mx = e.getX();
+    let my = e.getY();
+
+    if (dialog) {
+        handleDialogClick(mx, my);
+        return;
+    }
+
+    if (GAME_STATE == "EDITOR") {
+        handleEditorClick(mx, my);
+        return;
+    }
+    
+    if (GAME_STATE == "PLAYING" || GAME_STATE == "CUSTOM_PLAY") {
+        if (!isPaused) return;
+        for (let i = 0; i < pauseButtons.length; i++) {
+            let b = pauseButtons[i];
+            if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+                if (b.action == "RESUME") {
+                    resumeGame();
+                } else if (b.action == "RESTART_WORLD") {
+                    resumeGame();
+                    if (GAME_STATE == "CUSTOM_PLAY") restartCustomRun();
+                    else startWorld(currentWorld);
+                } else if (b.action == "WORLD_SELECT") {
+                    resumeGame();
+                    if (GAME_STATE == "CUSTOM_PLAY") exitCustomPlay();
+                    else showWorldSelect();
+                }
+                break;
+            }
+        }
+        return;
+    }
+   
+    for (let i = 0; i < worldButtons.length; i++) {
+        let b = worldButtons[i];
+        if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+            if (typeof handleCustomWorldAction === "function" && handleCustomWorldAction(b)) {
+                break;
+            }
+            if (b.action == "OPEN_WORLD_SELECT") {
+                showWorldSelect();
+            } else if (b.action == "OPEN_EDITOR") {
+                showCustomWorlds();
+            } else if (b.action == "BACK_TO_TITLE") {
+                titleScreen();
+            } else if (b.action == "START_WORLD") {
+                startWorld(b.worldNum);
+            } else if (b.action == "RESET_SAVE") {
+                localStorage.removeItem("cubeDash_unlockedWorlds");
+                localStorage.removeItem("cubeDash_bestTimes");
+                unlockedWorlds = 1;
+                bestTimes = {};
+                showWorldSelect();
+            }
+            break;
+        }
+    }
+}
+
+window.addEventListener("blur", () => {
+    if (GAME_STATE == "PLAYING" && !isPaused) {
+        pauseGame();
+    }
+});
+
+function pauseGame() {
+	if ((GAME_STATE != "PLAYING" && GAME_STATE != "CUSTOM_PLAY") || isPaused) return;
+    isPaused = true;
+    stopStopwatch();
+    
+    // Stop active movement keys so you don't slide when unpausing
+    movingLeft = false;
+    movingRight = false;
+    movingUp = false;
+    movingDown = false;
+
+    // Semi-transparent dark overlay
+    let overlay = new Rectangle(getWidth(), getHeight());
+    overlay.setPosition(0, 0);
+    overlay.setColor("rgba(0, 0, 0, 0.65)");
+    overlay.layer = 8;
+    add(overlay);
+    pauseElements.push(overlay);
+
+    // Menu card
+    let boxW = 300;
+    let boxH = 310;
+    let boxX = (getWidth() - boxW) / 2;
+    let boxY = (getHeight() - boxH) / 2;
+
+    let panel = new Rectangle(boxW, boxH);
+    panel.setPosition(boxX, boxY);
+    panel.setColor("saddlebrown");
+    panel.layer = 9;
+    add(panel);
+    pauseElements.push(panel);
+
+    let title = new Text("PAUSED", "26pt Verdana");
+    title.setPosition((getWidth() - title.getWidth()) / 2, boxY + 55);
+    title.setColor("moccasin");
+    title.layer = 10;
+    add(title);
+    pauseElements.push(title);
+
+    // Helper to build pause buttons
+    function makePauseBtn(label, yOffset, bgColor, actionName) {
+        let btnW = 220;
+        let btnH = 48;
+        let btnX = (getWidth() - btnW) / 2;
+        let btnY = boxY + yOffset;
+
+        let btn = new Rectangle(btnW, btnH);
+        btn.setPosition(btnX, btnY);
+        btn.setColor(bgColor);
+        btn.layer = 10;
+        add(btn);
+        pauseElements.push(btn);
+
+        let txt = new Text(label, "14pt Verdana");
+        txt.setPosition(btnX + (btnW - txt.getWidth()) / 2, btnY + 31);
+        txt.setColor("moccasin");
+        txt.layer = 11;
+        add(txt);
+        pauseElements.push(txt);
+
+        pauseButtons.push({ x: btnX, y: btnY, w: btnW, h: btnH, action: actionName });
+    }
+
+    makePauseBtn("RESUME (ESC)", 95, "peru", "RESUME");
+    makePauseBtn("RESTART WORLD", 160, "chocolate", "RESTART_WORLD");
+    makePauseBtn("WORLD SELECT", 225, "crimson", "WORLD_SELECT");
+}
+
+function resumeGame() {
+    if (!isPaused) return;
+    isPaused = false;
+    for (let i = 0; i < pauseElements.length; i++) {
+        remove(pauseElements[i]);
+    }
+    pauseElements = [];
+    pauseButtons = [];
+    
+    // Resume the stopwatch if the player had already started moving
+    if (elapsedTime > 0 && !timeFrozen) {
+        startStopwatch();
+    }
+}
+
+function getTotalBestTime() {
+    let totalMs = 0;
+    let hasAnyTime = false;
+    for (let w in bestTimes) {
+        if (bestTimes[w]) {
+            totalMs += bestTimes[w];
+            hasAnyTime = true;
+        }
+    }
+    return hasAnyTime ? formatTime(totalMs) : "--:--.--"
+}
+
+function startWorld(worldNum) {
+	stopStopwatch();
+	
+    let theme = WORLD_THEMES[worldNum] || DEFAULT_THEME;
+    BACKGROUND_COLOR = theme.bg;
+    WALL_COLOR = theme.wall;
+    PLAYER_COLOR = theme.player;
+    OBSTACLE_COLOR = "crimson";
+    DOOR_COLOR = theme.door;
+    GUI_COLOR = theme.gui;
+    background.setColor(BACKGROUND_COLOR);
+    
+    let startLevelIndex = (worldNum - 1) * LEVELS_PER_WORLD;
+    
+    if (startLevelIndex >= levels.length) {
+        return;
+    }
+    
+    clearMenuUI();
+    GAME_STATE = "PLAYING";
+    currentWorld = worldNum;
+    level = startLevelIndex;
+    
+    hp = MAX_HP;
+    movingLeft = false;
+    movingRight = false;
+    movingUp = false;
+    movingDown = false;
+    isDash = false;
+    canDash = true;
+    isInvulnerable = false;
+    
+    startTime = 0;
+    elapsedTime = 0;
+    isRunning = false;
+    
+    timeFrozen = false;
+    speedBoost = false;
+    SPEED = 3.5;
+	
+	hideGameplayUI();
+    initGUI();
+    initPlayer();
+    loadNextLevel();
+}
+
+function startDebugLevel(levelFunc, worldNum = 1) {
+    let theme = WORLD_THEMES[worldNum] || DEFAULT_THEME;
+    BACKGROUND_COLOR = theme.bg;
+    WALL_COLOR = theme.wall;
+    PLAYER_COLOR = theme.player;
+    OBSTACLE_COLOR = "crimson";
+    DOOR_COLOR = theme.door;
+    GUI_COLOR = theme.gui;
+    background.setColor(BACKGROUND_COLOR);
+
+    clearMenuUI();
+    GAME_STATE = "PLAYING";
+    currentWorld = worldNum;
+    
+    // Find the level's index in the levels array so beating it loads the next level properly
+    let idx = levels.indexOf(levelFunc);
+    level = idx !== -1 ? idx : 0;
+
+    hp = MAX_HP;
+	hideGameplayUI();
+    initGUI();
+    initPlayer();
+    loadNextLevel();
+}
+
+// Creates the background square.
+function initBackground() {
+    background = new Rectangle(getWidth(), getHeight());
+    background.setPosition(0, 0);
+    background.setColor(BACKGROUND_COLOR);
+    background.layer = 1;
+    add(background);
+}
+
+// Adds walls with collision wherever this function is called
+function addWall(x, y, width, height) {
+    let wall = new Rectangle(width, height);
+    wall.setPosition(x, y);
+    wall.setColor(WALL_COLOR);
+    add(wall);
+    wall.layer = 2;
+    walls.push(wall);
+}
+
+// Adds obstacles with a hitbox that you can get hurt from.
+function addObstacleRect(x, y, width, height) {
+    obstacle = new Rectangle(width, height);
+    obstacle.setPosition(x, y);
+    obstacle.setColor(OBSTACLE_COLOR);
+    add(obstacle);
+    obstacle.layer = 2;
+    obstacles.push(obstacle);
+}
+
+// Also obstacles, but this time its a circle.
+function addObstacleCirc(x, y, radius) {
+    let obstacleC = new Circle(radius);
+    obstacleC.setPosition(x, y);
+    obstacleC.setColor(OBSTACLE_COLOR);
+    add(obstacleC);
+    obstacleC.layer = 2;
+    obstacles.push(obstacleC);
+}
+
+// Object that leads to the next room in the game.
+function addDoor(x, y, width, height) {
+    let d = new Rectangle(width, height);
+    d.setPosition(x, y);
+    d.setColor(DOOR_COLOR);
+    d.layer = 3;
+    add(d);
+    doors.push(d);
+}
+
+function addItem(x, y, type) {
+    let item = new Circle(TILE_SIZE / 4);
+    item.setPosition(x + TILE_SIZE / 2, y + TILE_SIZE / 2);
+    item.itemType = type;
+    
+    if (type == "health") {
+        item.setColor("limeGreen");
+    } else if (type == "time") {
+        item.setColor("cyan");
+    } else if (type == "speed") {
+        item.setColor("yellow");
+    }
+    add(item);
+    items.push(item);
+}
+
+function addKey(x, y, isFake) {
+    let key = new Circle(TILE_SIZE / 3);
+    key.setPosition(x + TILE_SIZE / 2, y + TILE_SIZE / 2);
+    key.layer = 3;
+    
+    if (isFake) {
+        key.setColor(FAKE_KEY_COLOR);
+        add(key);
+        fakeKeys.push(key);
+    } else {
+        key.setColor(LOCK_COLOR);
+        add(key);
+        keys.push(key);
+    }
+}
+
+function addLockedDoor(x, y, width, height) {
+    let lockDoor = new Rectangle(width, height);
+    lockDoor.setPosition(x, y);
+    lockDoor.setColor(LOCK_COLOR);
+    add(lockDoor);
+    lockDoor.layer = 2;
+    
+    walls.push(lockDoor);
+    lockedDoors.push(lockDoor);
+}
+
+function addHazardWall(speed, startX = -TILE_SIZE) {
+    if (hazardWall != null) {
+        remove(hazardWall);
+    }
+    hazardWall = new Rectangle(getWidth(), getHeight());
+    hazardWall.setPosition(-getWidth() - (TILE_SIZE * 3), 0);
+    hazardWall.setColor("orangered");
+    hazardWall.layer = 3;
+    add(hazardWall);
+    hazardWallSpeed = speed;
+}
+
+function updateHazardWall() {
+    if (hazardWall == null || timeFrozen) return;
+    
+    let nextX = hazardWall.getX() + hazardWallSpeed;
+    hazardWall.setPosition(nextX, 0);
+    
+    if (rectsOverlap(curPlayerX, curPlayerY, PLAYER_SIZE, PLAYER_SIZE, nextX, 0, hazardWall.getWidth(), hazardWall.getHeight())) {
+        restartCurrentLevel();
+    }
+}
+
+let trackObstacles = [];
+let trackLines = [];
+
+function addTrackObstacle(type, points, speed) {
+    if (!points || points.length < 2) return;
+
+    for (let i = 0; i < points.length - 1; i++) {
+        let p1 = points[i];
+        let p2 = points[i + 1];
+        let x1 = p1.c * TILE_SIZE + TILE_SIZE / 2;
+        let y1 = p1.r * TILE_SIZE + TILE_SIZE / 2;
+        let x2 = p2.c * TILE_SIZE + TILE_SIZE / 2;
+        let y2 = p2.r * TILE_SIZE + TILE_SIZE / 2;
+
+        let rail = new GObject();
+        rail.layer = 1.5;
+        rail.draw = function() {
+            ctx.save();
+            ctx.strokeStyle = "rgba(0, 0, 0, 0.35)";
+            ctx.lineWidth = 6;
+            ctx.lineCap = "round";
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+
+            ctx.fillStyle = "rgba(255, 255, 255, 0.3)";
+            ctx.beginPath();
+            ctx.arc(x1, y1, 4, 0, Math.PI * 2);
+            ctx.arc(x2, y2, 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        };
+        add(rail);
+        trackLines.push(rail);
+    }
+
+    let startX = points[0].c * TILE_SIZE;
+    let startY = points[0].r * TILE_SIZE;
+    let obj;
+
+    if (type === "C") {
+        obj = new Circle(TILE_SIZE / 2);
+        obj.setPosition(startX + TILE_SIZE / 2, startY + TILE_SIZE / 2);
+    } else {
+        obj = new Rectangle(TILE_SIZE, TILE_SIZE);
+        obj.setPosition(startX, startY);
+    }
+    obj.setColor(OBSTACLE_COLOR);
+    obj.layer = 2.5;
+    add(obj);
+    obstacles.push(obj);
+
+    trackObstacles.push({
+        obj: obj,
+        type: type,
+        points: points,
+        speed: speed || 2.0,
+        segIndex: 0,
+        dir: 1,
+        progress: 0
+    });
+}
+
+function updateTrackObstacles() {
+    if (timeFrozen) return;
+
+    for (let i = 0; i < trackObstacles.length; i++) {
+        let tr = trackObstacles[i];
+        let pA = tr.points[tr.segIndex];
+        let pB = tr.points[tr.segIndex + tr.dir];
+        if (!pA || !pB) continue;
+
+        let ax = pA.c * TILE_SIZE, ay = pA.r * TILE_SIZE;
+        let bx = pB.c * TILE_SIZE, by = pB.r * TILE_SIZE;
+        let segLen = Math.hypot(bx - ax, by - ay);
+        if (segLen === 0) continue;
+
+        tr.progress += tr.speed / segLen;
+
+        while (tr.progress >= 1) {
+            tr.progress -= 1;
+            tr.segIndex += tr.dir;
+            if (tr.segIndex >= tr.points.length - 1) {
+                tr.segIndex = tr.points.length - 1;
+                tr.dir = -1;
+            } else if (tr.segIndex <= 0) {
+                tr.segIndex = 0;
+                tr.dir = 1;
+            }
+            pA = tr.points[tr.segIndex];
+            pB = tr.points[tr.segIndex + tr.dir];
+            ax = pA.c * TILE_SIZE; ay = pA.r * TILE_SIZE;
+            bx = pB.c * TILE_SIZE; by = pB.r * TILE_SIZE;
+        }
+
+        let curX = ax + (bx - ax) * tr.progress;
+        let curY = ay + (by - ay) * tr.progress;
+
+        if (tr.type === "C") {
+            tr.obj.setPosition(curX + TILE_SIZE / 2, curY + TILE_SIZE / 2);
+        } else {
+            tr.obj.setPosition(curX, curY);
+        }
+    }
+}
+
+// Starts the timer, HP, and Level numbers at the top of the screen.
+function initGUI() {
+    hpText = new Text("HP: " + hp + "/" + MAX_HP, "14pt Verdana");
+    hpText.setPosition(20, 35);
+    hpText.setColor(GUI_COLOR);
+    hpText.layer = 4;
+    add(hpText);
+    
+    levelText = new Text("", "14pt Verdana");
+    levelText.setPosition(740, 35);
+    levelText.setColor(GUI_COLOR);
+    levelText.layer = 4;
+    let origSetText = levelText.setText.bind(levelText);
+    levelText.setText = function(t) {
+        origSetText(t);
+        this.setPosition(getWidth() - 20 - this.getWidth(), 35);
+    };
+    add(levelText);
+    
+    timeText = new Text("00:00.00", "14pt Verdana");
+    timeText.setPosition(370, 35);
+    timeText.setColor(GUI_COLOR);
+    timeText.layer = 4;
+    add(timeText);
+    
+    if (isRunning) {
+        setTimer(update, 10);
+    }
+}
+
+// Starts the player box object
+function initPlayer() {
+    player = new Rectangle(PLAYER_SIZE, PLAYER_SIZE);
+    player.setPosition(spawnX, spawnY);
+    player.setColor(PLAYER_COLOR);
+    add(player);
+    player.layer = 3;
+    
+    curPlayerX = player.getX();
+    curPlayerY = player.getY();
+}
+
+// Checks which direction keys are being pressed and moves the player in that direction.
+function playerDirCheck(e) {
+    if (dialog) {
+        handleDialogKey(e);
+        return;
+    }
+    if (e.key == "Escape" && (GAME_STATE == "WORLD_SELECT" || GAME_STATE == "CUSTOM_WORLDS")) {
+        titleScreen();
+        return;
+    }
+
+    if (GAME_STATE == "EDITOR") {
+        handleEditorKey(e);
+        return;
+    }
+
+    if (e.key == "Escape" && GAME_STATE == "CUSTOM_PLAY") {
+        exitCustomPlay();
+        return;
+    }
+    
+	if ((e.key == "Escape" || e.key == "p" || e.key == "P") && (GAME_STATE == "PLAYING" || GAME_STATE == "CUSTOM_PLAY")) {
+		if (isPaused) resumeGame();
+		else pauseGame();
+		return;
+	}
+    
+    if ((GAME_STATE != "PLAYING" && GAME_STATE != "CUSTOM_PLAY") || isPaused) return;
+
+    let k = e.key.toLowerCase();
+    if (e.key == "ArrowLeft" || k == "a") {
+        movingLeft = true;
+        startStopwatch();
+    } else if (e.key == "ArrowUp" || k == "w") {
+        movingUp = true;
+        startStopwatch();
+    } else if (e.key == "ArrowRight" || k == "d") {
+        movingRight = true;
+        startStopwatch();
+    } else if (e.key == "ArrowDown" || k == "s") {
+        movingDown = true;
+        startStopwatch();
+    } else if ((e.key == " " || e.key == "Shift" || k == "j" || k == "z") && canDash) {
+        dash();
+    } else if (e.key == "r" || e.key == "R") {
+        if (GAME_STATE == "CUSTOM_PLAY") {
+            restartCustomRun();
+        } else if (DEBUG_LEVEL != null) {
+            clearLevel();
+            DEBUG_LEVEL();
+            resetPlayerPos();
+        } else {
+            restart();
+        }
+    }
+}
+
+function playerStopCheck(e) {
+    let k = e.key.toLowerCase();
+    if (e.key == "ArrowLeft" || k == "a") {
+        movingLeft = false;
+    } else if (e.key == "ArrowUp" || k == "w") {
+        movingUp = false;
+    } else if (e.key == "ArrowRight" || k == "d") {
+        movingRight = false;
+    } else if (e.key == "ArrowDown" || k == "s") {
+        movingDown = false;
+    }
+}
+
+// Resets the player to a set position every time.
+function resetPlayerPos() {
+    curPlayerX = spawnX;
+    curPlayerY = spawnY;
+    player.setPosition(curPlayerX, curPlayerY);
+}
+
+// Sets the player speed and collision with walls.
+function playerMove() {
+    if ((GAME_STATE != "PLAYING" && GAME_STATE != "CUSTOM_PLAY") || isPaused) return;
+
+    let currentSpeed = isDash ? DASH_SPEED : SPEED;
+    let dx = 0;
+    let dy = 0;
+
+    if (movingLeft) dx -= 1;
+    if (movingRight) dx += 1;
+    if (movingUp) dy -= 1;
+    if (movingDown) dy += 1;
+
+    if (dx != 0 && dy != 0) {
+        dx *= 0.7071;
+        dy *= 0.7071;
+    }
+
+    let steps = Math.ceil(currentSpeed / 2);
+    let stepX = (dx * currentSpeed) / steps;
+    let stepY = (dy * currentSpeed) / steps;
+
+    for (let s = 0; s < steps; s++) {
+        curPlayerX += stepX;
+        if (curPlayerX < 0) curPlayerX = 0;
+        if (curPlayerX + PLAYER_SIZE > getWidth()) curPlayerX = getWidth() - PLAYER_SIZE;
+
+        for (let i = 0; i < walls.length; i++) {
+            let w = walls[i];
+            if (rectsOverlap(curPlayerX, curPlayerY, PLAYER_SIZE, PLAYER_SIZE, w.getX(), w.getY(), w.getWidth(), w.getHeight())) {
+                if (stepX > 0) curPlayerX = w.getX() - PLAYER_SIZE;
+                else if (stepX < 0) curPlayerX = w.getX() + w.getWidth();
+            }
+        }
+
+        curPlayerY += stepY;
+        if (curPlayerY < 0) curPlayerY = 0;
+        if (curPlayerY + PLAYER_SIZE > getHeight()) curPlayerY = getHeight() - PLAYER_SIZE;
+
+        for (let i = 0; i < walls.length; i++) {
+            let w = walls[i];
+            if (rectsOverlap(curPlayerX, curPlayerY, PLAYER_SIZE, PLAYER_SIZE, w.getX(), w.getY(), w.getWidth(), w.getHeight())) {
+                if (stepY > 0) curPlayerY = w.getY() - PLAYER_SIZE;
+                else if (stepY < 0) curPlayerY = w.getY() + w.getHeight();
+            }
+        }
+    }
+
+    player.setPosition(curPlayerX, curPlayerY);
+}
+
+// Cooldowns and timers to balance the dash ability. Also turns player white when dashing.
+function dash() {
+    isDash = true;
+    canDash = false;
+    player.setColor("white");
+    
+    setTimeout(endDash, DASH_DURATION);
+    setTimeout(resetDash, DASH_COOLDOWN);
+}
+
+// Ends the dash and returns the player to the original color
+function endDash() {
+    isDash = false;
+    if (player) {
+        player.setColor(PLAYER_COLOR);
+    }
+}
+
+// Ends the cooldown and allows the player to dash.
+function resetDash() {
+    canDash = true;
+}
+
+function run() {
+	if (dialog) return;
+	if ((GAME_STATE != "PLAYING" && GAME_STATE != "CUSTOM_PLAY") || isPaused) return;
+    
+    if (!isDash && !isInvulnerable) {
+        checkObstacleCollisions();
+    }
+    
+    checkItemCollisions();
+    checkKeyCollisions();
+    updateHazardWall();
+    updateTrackObstacles();
+    
+	for (let i = 0; i < doors.length; i++) {
+		let d = doors[i];
+		if (rectsOverlap(curPlayerX, curPlayerY, PLAYER_SIZE, PLAYER_SIZE, d.getX(), d.getY(), d.getWidth(), d.getHeight())) {
+			if (GAME_STATE == "CUSTOM_PLAY") {
+				customLevelCleared();
+			} else {
+				loadNextLevel();
+			}
+			break;
+		}
+	}
+}
+
+function checkObstacleCollisions() {
+    for (let i = 0; i < obstacles.length; i++) {
+        let obs = obstacles[i];
+        let hit = false;
+        
+        if (obs.getType() == "Circle") {
+            hit = circleRectOverlap(obs.getX(), obs.getY(), obs.getRadius(), curPlayerX, curPlayerY, PLAYER_SIZE, PLAYER_SIZE);
+        } else {
+            hit = rectsOverlap(curPlayerX, curPlayerY, PLAYER_SIZE, PLAYER_SIZE, obs.getX(), obs.getY(), obs.getWidth(), obs.getHeight());
+        }
+        
+        if (hit) {
+            takeDamage();
+            break;
+        }
+    }
+}
+
+function checkItemCollisions() {
+    for (let i = items.length - 1; i >= 0; i--) {
+        let item = items[i];
+        if (circleRectOverlap(item.getX(), item.getY(), item.getRadius(), player.getX(), player.getY(), PLAYER_SIZE, PLAYER_SIZE)) {
+            applyItemEffect(item.itemType);
+            remove(item);
+            items.splice(i, 1);
+        }
+    }
+}
+
+function applyItemEffect(type) {
+    if (type == "health") {
+        if (hp < MAX_HP) {
+            hp++;
+            hpText.setText("HP: " + hp + "/" + MAX_HP);
+        }
+	} else if (type == "time") {
+		if (!timeFrozen && isRunning) {
+			timeFrozen = true;
+			stopStopwatch();
+			timeText.setColor("cyan");
+			clearTimeout(timeFreezeTimeout);
+			timeFreezeTimeout = setTimeout(resumeStopwatch, 5000);
+		}
+	} else if (type == "speed") {
+		speedBoost = true;
+		SPEED = BOOST_SPEED;
+		clearTimeout(speedBoostTimeout);
+		speedBoostTimeout = setTimeout(endSpeedBoost, 7000);
+	}
+}
+
+function checkKeyCollisions() {
+    for (let i = keys.length - 1; i >= 0; i--) {
+        let k = keys[i];
+        if (circleRectOverlap(k.getX(), k.getY(), k.getRadius(), player.getX(), player.getY(), PLAYER_SIZE, PLAYER_SIZE)) {
+            remove(k);
+            keys.splice(i, 1);
+            unlockDoors();
+        }
+    }
+    for (let i = fakeKeys.length - 1; i >= 0; i--) {
+        let fk = fakeKeys[i];
+        if (circleRectOverlap(fk.getX(), fk.getY(), fk.getRadius(), player.getX(), player.getY(), PLAYER_SIZE, PLAYER_SIZE)) {
+            if (!isDash && !isInvulnerable) {
+                remove(fk);
+                fakeKeys.splice(i, 1);
+                takeDamage();
+            }
+        }
+    }
+}
+
+function unlockDoors() {
+    for (let i = 0; i < lockedDoors.length; i++) {
+        let lockDoor = lockedDoors[i];
+        remove(lockDoor);
+    
+        let wallIndex = walls.indexOf(lockDoor);
+        if (wallIndex > -1) {
+            walls.splice(wallIndex, 1);
+        }
+    }
+    lockedDoors = [];
+}
+
+function resumeStopwatch() {
+    timeFrozen = false;
+    if ((GAME_STATE == "PLAYING" || GAME_STATE == "CUSTOM_PLAY") && timeText) {
+        timeText.setColor(GUI_COLOR);
+        startStopwatch();
+    }
+}
+
+function endSpeedBoost() {
+    speedBoost = false;
+    SPEED = 3.5;
+}
+
+function takeDamage() {
+    hp--;
+    hpText.setText("HP: " + hp + "/" + MAX_HP);
+    
+    if (hp <= 0) {
+        restart();
+    } else {
+        isInvulnerable = true;
+        
+        // Clear any existing blink timer in case of rapid hits
+        if (invulnBlinkInterval) clearInterval(invulnBlinkInterval);
+        
+        let blinkOn = true;
+        player.setColor("gold");
+        
+        // Toggle color every 80ms for a rapid blink effect
+        invulnBlinkInterval = setInterval(() => {
+            if (!player || !isInvulnerable) return;
+            if (!isDash) { // Keep the white dash color intact if dashing
+                blinkOn = !blinkOn;
+                player.setColor(blinkOn ? "gold" : BACKGROUND_COLOR);
+            }
+        }, 80);
+        
+        setTimeout(endInvulnerable, TITLE_CARD);
+    }
+}
+
+function endInvulnerable() {
+    isInvulnerable = false;
+    if (invulnBlinkInterval) {
+        clearInterval(invulnBlinkInterval);
+        invulnBlinkInterval = null;
+    }
+    if (!isDash && player) {
+        player.setColor(PLAYER_COLOR);
+    }
+}
+
+function rectsOverlap(x1, y1, w1, h1, x2, y2, w2, h2) {
+    return x1 < x2 + w2 &&
+    x1 + w1 > x2 &&
+    y1 < y2 + h2 &&
+    y1 + h1 > y2;
+}
+
+function circleRectOverlap(cx, cy, radius, rx, ry, rw, rh) {
+    let circleX = cx;
+    let circleY = cy;
+    
+    if (cx < rx) circleX = rx;
+    else if (cx > rx + rw) circleX = rx + rw;
+    if (cy < ry) circleY = ry;
+    else if (cy > ry + rh) circleY = ry + rh;
+    
+    let distanceX = cx - circleX;
+    let distanceY = cy - circleY;
+    let distance = Math.sqrt((distanceX * distanceX) + (distanceY * distanceY));
+    return distance <= radius;
+}
+
+function restart() {
+	if (GAME_STATE == "CUSTOM_PLAY") {
+		restartCustomRun();
+		return;
+	}
+    hp = MAX_HP;
+    hpText.setText("HP: " + hp + "/" + MAX_HP);
+    movingLeft = false;
+    movingRight = false;
+    movingUp = false;
+    movingDown = false;
+    isDash = false;
+    canDash = true;
+    isInvulnerable = false;
+    player.setColor(PLAYER_COLOR);
+    
+    level = (currentWorld - 1) * LEVELS_PER_WORLD;
+    loadNextLevel();
+    resetPlayerPos();
+	
+	if (invulnBlinkInterval) { clearInterval(invulnBlinkInterval); invulnBlinkInterval = null; }
+}
+
+function restartCurrentLevel() {
+    movingLeft = false;
+    movingRight = false;
+    movingUp = false;
+    movingDown = false;
+    isDash = false;
+    canDash = true;
+    isInvulnerable = false;
+    if (player) {
+        player.setColor(PLAYER_COLOR);
+    }
+    
+    // Decrement 'level' by 1 because loadNextLevel() increments it after loading
+    if (level > 0) {
+        level--;
+    }
+    loadNextLevel();
+    resetPlayerPos();
+	if (invulnBlinkInterval) { clearInterval(invulnBlinkInterval); invulnBlinkInterval = null; }
+}
+
+function clearLevel() {
+    for (let i = 0; i < walls.length; i++) {
+        remove(walls[i]);
+    }
+    walls = [];
+    
+    for (let i = 0; i < obstacles.length; i++) {
+        remove(obstacles[i]);
+    }
+    obstacles = [];
+    
+    for (let i = 0; i < items.length; i++) {
+        remove(items[i]);
+    }
+    items = [];
+    
+    for (let i = 0; i < keys.length; i++) {
+        remove(keys[i]);
+    }
+    keys = [];
+    
+    for (let i = 0; i < fakeKeys.length; i++) {
+        remove(fakeKeys[i]);
+    }
+    fakeKeys = [];
+    
+    for (let i = 0; i < lockedDoors.length; i++) {
+        remove(lockedDoors[i]);
+    }
+    lockedDoors = [];
+    
+    if (hazardWall != null) {
+        remove(hazardWall);
+        hazardWall = null;
+        hazardWallSpeed = 0;
+    }
+	for (let i = 0; i < doors.length; i++) {
+    remove(doors[i]);
+	}
+	doors = [];
+	
+    trackObstacles = [];
+    for (let i = 0; i < trackLines.length; i++) {
+        remove(trackLines[i]);
+    }
+    trackLines = [];
+}
+
+function loadNextLevel() {
+	if (GAME_STATE == "CUSTOM_PLAY") {
+		playCustomLevel({ keepHp: true, keepTime: true });
+		return;
+	}
+    clearLevel();
+    
+    let endOfCurrentWorld = currentWorld * LEVELS_PER_WORLD;
+    
+    if (level >= endOfCurrentWorld) {
+        stopStopwatch();
+        
+        if (!bestTimes[currentWorld] || elapsedTime < bestTimes[currentWorld]) {
+            bestTimes[currentWorld] = elapsedTime;
+        }
+        
+        if (currentWorld >= unlockedWorlds && unlockedWorlds < TOTAL_WORLDS) {
+            unlockedWorlds = currentWorld + 1;
+        }
+        
+        saveGameData();
+        showWorldSelect();
+        return;
+    }
+    
+    if (level < levels.length) {
+        levels[level]();
+        level++;
+        curPlayerX = spawnX;
+        curPlayerY = spawnY;
+        player.setPosition(curPlayerX, curPlayerY);
+    } else {
+        stopStopwatch();
+        showWorldSelect();
+    }
+}
+
+function startStopwatch() {
+    if (!isRunning && !timeFrozen) {
+        startTime = Date.now() - elapsedTime;
+        stopwatch = setTimer(update, 10);
+        isRunning = true;
+    }
+}
+
+function stopStopwatch() {
+    if (isRunning) {
+        stopTimer(update);
+        elapsedTime = Date.now() - startTime;
+        isRunning = false;
+        stopwatch = null;
+    }
+}
+
+function resetStopwatch() {
+    stopTimer(update);
+    stopwatch = null;
+    startTime = 0;
+    elapsedTime = 0;
+    isRunning = false;
+    if (timeText) timeText.setText("00:00.00");
+}
+
+function update() {
+	if (GAME_STATE != "PLAYING" && GAME_STATE != "CUSTOM_PLAY") return;
+    
+    elapsedTime = Date.now() - startTime;
+    
+    let minutes = Math.floor((elapsedTime / (1000 * 60)) % 60);
+    let seconds = Math.floor((elapsedTime / 1000) % 60);
+    let centiseconds = Math.floor((elapsedTime % 1000) / 10);
+    
+    if (minutes < 10) {
+        minutes = "0" + minutes;
+    }
+    if (seconds < 10) {
+        seconds = "0" + seconds;
+    }
+    if (centiseconds < 10) {
+        centiseconds = "0" + centiseconds;
+    }
+    timeText.setText(minutes + ":" + seconds + ":" + centiseconds);
+    timeText.setColor(GUI_COLOR);
+    
+    if (!timeFrozen) {
+        timeText.setColor(GUI_COLOR);
+    }
+}
+
+// ============================================================
+//  LEVEL EDITOR  (Mario Maker style: icon palette, recent bar, all-objects menu)
+// ============================================================
+let editorGrid = [];
+let editorTheme = 1;
+let editorHazardSpeed = 0;
+let selectedTool = "#";
+let isMouseDown = false;
+let editorUI = [];
+let editorButtons = [];
+let editorPanel = null;       // null | "objects" | "hazard" | "colors" | "levels"
+let editorSliderDrag = false;
+let editorLastSpeed = 0.65;
+let editorMenuLayout = null;
+let editorMouse = { x: -1, y: -1 };
+
+const EDITOR_TOP_H = 36;
+const EDITOR_BOTTOM_H = 48;
+const RECENT_SLOTS = 8;
+const RECENT_KEY = "cubeDash_editorRecent";
+
+// Every placeable object. To add a new one: add it here, give it an icon in drawToolIcon,
+// list it in EDITOR_MENU_SECTIONS, and handle its tile in loadMap().
+const EDITOR_TOOLS = [
+    { tile: "#", label: "Wall",       desc: "Its a wall." },
+    { tile: "X", label: "Block",      desc: "Square obstacle, dash through it." },
+    { tile: "C", label: "Orb",        desc: "Circle obstacle, dash through it." },
+    { tile: "=", label: "Moving Box", desc: "Drag across tiles to make a moving square." },
+    { tile: "O", label: "Moving Orb", desc: "Drag across tiles to make a moving orb." },
+    { tile: "D", label: "Door",       desc: "Leads to the next level or the end." },
+    { tile: "K", label: "Key",        desc: "Opens locked doors." },
+    { tile: "L", label: "Lock",       desc: "Locked door that needs a key." },
+    { tile: "F", label: "Fake Key",   desc: "Fake key that hurts you." },
+    { tile: "H", label: "+HP",        desc: "Adds 1 HP." },
+    { tile: "T", label: "Time",       desc: "Freezes the timer for 5 seconds." },
+    { tile: "S", label: "Speed",      desc: "Speed boost for 7 seconds." },
+    { tile: "P", label: "Spawn",      desc: "Starting position for the player." },
+    { tile: ".", label: "Erase",      desc: "Erases tiles or tracks." }
+];
+
+const EDITOR_HAZARD_ENTRY = { tile: "~", label: "Hazard Wall", desc: "Rapidly approaching wall, you cant dash through it btw." };
+
+const EDITOR_MENU_SECTIONS = [
+    { col: 0, title: "BUILDING",     items: ["#", "D"] },
+    { col: 0, title: "HAZARDS",      items: ["X", "C", "=", "O", "~"] },
+    { col: 0, title: "PLAYER",       items: ["P", "."] },
+    { col: 1, title: "KEYS & LOCKS", items: ["K", "L", "F"] },
+    { col: 1, title: "POWER-UPS",    items: ["H", "T", "S"] }
+];
+
+// Most recently picked objects (newest first). Saved between visits.
+let editorRecent = ["#", "X", "C", "D", "K", "P"];
+
+function loadEditorRecent() {
+    try {
+        let saved = JSON.parse(localStorage.getItem(RECENT_KEY));
+        if (Array.isArray(saved)) {
+            let ok = saved.filter(t => t !== "." && EDITOR_TOOLS.some(x => x.tile === t));
+            if (ok.length > 0) editorRecent = ok.slice(0, RECENT_SLOTS);
+        }
+    } catch (err) {}
+}
+function saveEditorRecent() {
+    try { localStorage.setItem(RECENT_KEY, JSON.stringify(editorRecent)); } catch (err) {}
+}
+function pushRecent(tile) {
+    if (tile === "." || tile === "~") return;
+    editorRecent = [tile].concat(editorRecent.filter(t => t !== tile)).slice(0, RECENT_SLOTS);
+    saveEditorRecent();
+}
+loadEditorRecent();
+
+function toolInfo(tile) {
+    if (tile === "~") return EDITOR_HAZARD_ENTRY;
+    return EDITOR_TOOLS.find(t => t.tile === tile);
+}
+function selectTool(tile, fromRecentBar) {
+    selectedTool = tile;
+    // Picking from the recent bar keeps its order; picking anywhere else moves it to the front.
+    if (!fromRecentBar) pushRecent(tile);
+}
+
+function editorHit(b, mx, my) {
+    return mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h;
+}
+function editorCanvasPos(e) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+        x: (e.clientX - rect.left) * (canvas.width / rect.width),
+        y: (e.clientY - rect.top) * (canvas.height / rect.height)
+    };
+}
+function editorRR(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+}
+function addEditorLayer(layer, drawFn) {
+    let o = new GObject();
+    o.draw = drawFn;
+    o.layer = layer;
+    add(o);
+    editorUI.push(o);
+    return o;
+}
+
+// ------------------------------------------------------------
+//  Icons: drawn exactly like the objects in the game (same shapes, colors and
+//  proportions, using the current world theme). Only the eraser is a tool icon.
+// ------------------------------------------------------------
+function drawToolIcon(tile, x, y, s, alpha) {
+    ctx.save();
+    ctx.globalAlpha = (alpha === undefined) ? 1 : alpha;
+    const cx = x + s / 2, cy = y + s / 2;
+    const rect = (color) => { ctx.fillStyle = color; ctx.fillRect(x, y, s, s); };
+    const circle = (r, color) => {
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    };
+
+    if (tile === "#")      rect(WALL_COLOR);
+    else if (tile === "X") rect(OBSTACLE_COLOR);
+    else if (tile === "C") circle(s / 2, OBSTACLE_COLOR);
+    else if (tile === "D") rect(DOOR_COLOR);
+    else if (tile === "L") rect(LOCK_COLOR);
+    else if (tile === "K") circle(s / 3, LOCK_COLOR);
+    else if (tile === "F") circle(s / 3, FAKE_KEY_COLOR);
+    else if (tile === "H") circle(s / 4, "limeGreen");
+    else if (tile === "T") circle(s / 4, "cyan");
+    else if (tile === "S") circle(s / 4, "yellow");
+    else if (tile === "~") rect("orangered");
+	else if (tile === "=" || tile === "O") {
+        // Draw rail line behind the obstacle icon
+        ctx.strokeStyle = "rgba(255,255,255,0.75)";
+        ctx.lineWidth = Math.max(2, s * 0.12);
+        ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(x + s * 0.1, cy);
+        ctx.lineTo(x + s * 0.9, cy);
+        ctx.stroke();
+
+        const r = s * 0.34;
+        if (tile === "=") {
+            ctx.fillStyle = OBSTACLE_COLOR;
+            ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+        } else {
+            circle(r, OBSTACLE_COLOR);
+        }
+    }
+    else if (tile === "P") {
+        const ps = s * (PLAYER_SIZE / TILE_SIZE);
+        ctx.fillStyle = PLAYER_COLOR;
+        ctx.fillRect(cx - ps / 2, cy - ps / 2, ps, ps);
+    } else if (tile === ".") {
+        // Eraser (a tool, not a game object)
+        ctx.translate(cx, cy);
+        ctx.rotate(-Math.PI / 4);
+        const w = s * 0.66, h = s * 0.36;
+        ctx.fillStyle = "#f4a3b5";
+        ctx.fillRect(-w / 2, -h / 2, w * 0.62, h);
+        ctx.fillStyle = "#eeeeee";
+        ctx.fillRect(-w / 2 + w * 0.62, -h / 2, w * 0.38, h);
+        ctx.strokeStyle = "rgba(0,0,0,0.5)";
+        ctx.lineWidth = Math.max(1, s / 20);
+        ctx.strokeRect(-w / 2, -h / 2, w, h);
+    }
+    ctx.restore();
+}
+
+// ------------------------------------------------------------
+//  Drawing: cursor preview, bottom palette bar, all-objects menu
+// ------------------------------------------------------------
+function drawEditorGridLines() {
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
+    ctx.lineWidth = 1;
+    for (let r = 0; r < 15; r++) {
+        for (let c = 0; c < 20; c++) {
+            ctx.strokeRect(c * TILE_SIZE, r * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+        }
+    }
+}
+
+function drawEditorCursor() {
+    if (editorPanel) return;
+    let mx = editorMouse.x, my = editorMouse.y;
+    if (mx < 0 || my < EDITOR_TOP_H || my > getHeight() - EDITOR_BOTTOM_H) return;
+    let c = Math.floor(mx / TILE_SIZE), r = Math.floor(my / TILE_SIZE);
+    if (c < 0 || c >= 20 || r < 0 || r >= 15) return;
+    let x = c * TILE_SIZE, y = r * TILE_SIZE;
+    if (selectedTool === ".") {
+        ctx.fillStyle = "rgba(255, 60, 60, 0.3)";
+        ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+    } else {
+        drawToolIcon(selectedTool, x, y, TILE_SIZE, 0.6);
+    }
+    ctx.strokeStyle = "white";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 1, y + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+}
+
+function drawEditorBottomBar() {
+    const W = getWidth();
+    const barY = getHeight() - EDITOR_BOTTOM_H;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.88)";
+    ctx.fillRect(0, barY, W, EDITOR_BOTTOM_H);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.15)";
+    ctx.fillRect(0, barY, W, 1);
+
+    const mx = editorMouse.x, my = editorMouse.y;
+    const slot = 38, sy = barY + (EDITOR_BOTTOM_H - slot) / 2;
+
+    // Empty recent slots (dashed outlines)
+    ctx.save();
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.lineWidth = 1;
+    for (let i = editorRecent.length; i < RECENT_SLOTS; i++) {
+        editorRR(104 + i * (slot + 6) + 0.5, sy + 0.5, slot - 1, slot - 1, 6);
+        ctx.stroke();
+    }
+    ctx.restore();
+
+    for (const b of editorButtons) {
+        if (b.group !== "bar") continue;
+        const hover = editorHit(b, mx, my);
+
+        if (b.action === "OPEN_MENU") {
+            ctx.fillStyle = hover ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.14)";
+            editorRR(b.x, b.y, b.w, b.h, 8); ctx.fill();
+            ctx.fillStyle = "white";
+            for (let gy = 0; gy < 2; gy++) for (let gx = 0; gx < 2; gx++) {
+                ctx.fillRect(b.x + 10 + gx * 10, b.y + 9 + gy * 10, 8, 8);
+            }
+            ctx.font = "bold 13px Verdana";
+            ctx.fillText("ALL", b.x + 38, b.y + 24);
+            continue;
+        }
+
+        // Tool slot (recent or erase)
+        const selected = selectedTool === b.tile;
+        ctx.fillStyle = BACKGROUND_COLOR;
+        editorRR(b.x, b.y, b.w, b.h, 6); ctx.fill();
+        drawToolIcon(b.tile, b.x + 5, b.y + 5, b.w - 10);
+        if (selected) {
+            ctx.strokeStyle = "white"; ctx.lineWidth = 3;
+            editorRR(b.x - 1, b.y - 1, b.w + 2, b.h + 2, 7); ctx.stroke();
+        } else {
+            ctx.strokeStyle = hover ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.25)";
+            ctx.lineWidth = hover ? 2 : 1;
+            editorRR(b.x, b.y, b.w, b.h, 6); ctx.stroke();
+        }
+    }
+
+    // Name + description of the selected object
+    const info = toolInfo(selectedTool);
+    if (info) {
+        ctx.fillStyle = "white";
+        ctx.font = "bold 12px Verdana";
+        ctx.fillText(info.label, 466, barY + 20);
+        ctx.fillStyle = "#bbbbbb";
+        ctx.font = "10px Verdana";
+        ctx.fillText(info.desc, 466, barY + 36);
+    }
+}
+
+function drawEditorMenu() {
+    if (editorPanel !== "objects" || !editorMenuLayout) return;
+    const L = editorMenuLayout, p = L.panel;
+    const mx = editorMouse.x, my = editorMouse.y;
+
+    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.fillRect(0, 0, getWidth(), getHeight());
+
+    ctx.fillStyle = "#1f1f1f";
+    editorRR(p.x, p.y, p.w, p.h, 14); ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    ctx.lineWidth = 2;
+    editorRR(p.x, p.y, p.w, p.h, 14); ctx.stroke();
+
+    ctx.fillStyle = "white";
+    ctx.font = "bold 16px Verdana";
+    ctx.fillText("ALL OBJECTS", p.x + 20, p.y + 34);
+
+    for (const h of L.headers) {
+        ctx.fillStyle = "#aaaaaa";
+        ctx.font = "bold 11px Verdana";
+        ctx.fillText(h.text, h.x, h.y + 12);
+        ctx.fillStyle = "rgba(255,255,255,0.15)";
+        ctx.fillRect(h.x + ctx.measureText(h.text).width + 8, h.y + 8, h.w - ctx.measureText(h.text).width - 8, 1);
+    }
+
+    let hovered = null;
+    for (const b of editorButtons) {
+        if (b.group !== "menu") continue;
+        const hover = editorHit(b, mx, my);
+
+        if (b.action === "CLOSE_MENU") {
+            ctx.fillStyle = hover ? "crimson" : "rgba(255,255,255,0.15)";
+            editorRR(b.x, b.y, b.w, b.h, 6); ctx.fill();
+            ctx.strokeStyle = "white"; ctx.lineWidth = 2; ctx.lineCap = "round";
+            ctx.beginPath();
+            ctx.moveTo(b.x + 9, b.y + 9); ctx.lineTo(b.x + b.w - 9, b.y + b.h - 9);
+            ctx.moveTo(b.x + b.w - 9, b.y + 9); ctx.lineTo(b.x + 9, b.y + b.h - 9);
+            ctx.stroke();
+            continue;
+        }
+
+        const isHaz = b.tile === "~";
+        const selected = isHaz ? editorHazardSpeed > 0 : selectedTool === b.tile;
+        if (hover) hovered = b;
+
+        ctx.fillStyle = BACKGROUND_COLOR;
+        editorRR(b.x, b.y, b.w, b.h, 10); ctx.fill();
+        if (hover) {
+            ctx.fillStyle = "rgba(255,255,255,0.18)";
+            editorRR(b.x, b.y, b.w, b.h, 10); ctx.fill();
+        }
+        drawToolIcon(b.tile, b.x + (b.w - 48) / 2, b.y + 10, 48);
+
+        ctx.textAlign = "center";
+        ctx.fillStyle = "white";
+        ctx.font = "bold 11px Verdana";
+        ctx.fillText(toolInfo(b.tile).label, b.x + b.w / 2, b.y + 82);
+        ctx.textAlign = "left";
+
+        if (isHaz) {
+            ctx.fillStyle = selected ? "limegreen" : "#666";
+            editorRR(b.x + b.w - 42, b.y + 6, 37, 14, 7); ctx.fill();
+            ctx.fillStyle = selected ? "black" : "white";
+            ctx.font = "bold 9px Verdana";
+            ctx.textAlign = "center";
+            ctx.fillText(selected ? String(editorHazardSpeed) : "OFF", b.x + b.w - 23.5, b.y + 16);
+            ctx.textAlign = "left";
+        }
+
+        if (selected) {
+            ctx.strokeStyle = isHaz ? "limegreen" : "white";
+            ctx.lineWidth = 3;
+            editorRR(b.x - 1, b.y - 1, b.w + 2, b.h + 2, 11); ctx.stroke();
+        }
+    }
+
+    // Footer: hovered object's description, or a hint
+    ctx.fillStyle = "#cccccc";
+    ctx.font = "11px Verdana";
+    ctx.fillText(
+        hovered ? toolInfo(hovered.tile).label + ": " + toolInfo(hovered.tile).desc
+                : "Press M or Esc to close.",
+        p.x + 20, p.y + p.h - 14
+    );
+}
+
+// ------------------------------------------------------------
+//  In-game dialogs (the browser's prompt/confirm/alert aren't available here)
+// ------------------------------------------------------------
+let dialog = null;
+let dialogObj = null;
+let uiMouse = { x: -1, y: -1 };
+
+function layoutDialog() {
+    const d = dialog, W = getWidth(), H = getHeight();
+    const bw = 480, pad = 20;
+    ctx.font = "12px Verdana";
+    let lines = [];
+    String(d.text || "").split("\n").forEach(par => {
+        let words = par.split(" "), line = "";
+        words.forEach(w => {
+            let t = line ? line + " " + w : w;
+            if (ctx.measureText(t).width > bw - 2 * pad && line) { lines.push(line); line = w; }
+            else line = t;
+        });
+        lines.push(line);
+    });
+    if (lines.length === 1 && lines[0] === "") lines = [];
+    let h = lines.length > 0 ? 48 + lines.length * 18 : 44;
+    let input = null;
+    if (d.type === "input" || d.type === "code") {
+        const ih = d.type === "code" ? 80 : 36;
+        input = { rel: h, h: ih };
+        h += ih + 16;
+    }
+    let btnRel = h;
+    h += 36 + 20;
+    const bx = (W - bw) / 2, by = Math.max(10, (H - h) / 2 - 20);
+    let buttons = [];
+    let x = bx + bw - pad;
+    for (let i = d.buttons.length - 1; i >= 0; i--) {
+        const s = d.buttons[i], w = s.w || 110;
+        x -= w;
+        buttons.unshift({ x: x, y: by + btnRel, w: w, h: 36, label: s.label, color: s.color, run: s.run });
+        x -= 10;
+    }
+    d.layout = {
+        box: { x: bx, y: by, w: bw, h: h }, lines: lines, buttons: buttons,
+        input: input ? { x: bx + pad, y: by + input.rel, w: bw - 2 * pad, h: input.h } : null
+    };
+}
+
+// The level-code box is a real text box laid over the canvas, so the player can
+// highlight the code, copy it with Ctrl+C, and paste another with Ctrl+V.
+function createDialogDom() {
+    try {
+        const ta = document.createElement("textarea");
+        ta.value = dialog.value;
+        ta.spellcheck = false;
+        ta.setAttribute("autocomplete", "off");
+        ta.setAttribute("autocapitalize", "off");
+        Object.assign(ta.style, {
+            position: "fixed", zIndex: "1000", boxSizing: "border-box", background: "#111111",
+            color: "white", border: "2px solid white", borderRadius: "8px", padding: "8px",
+            font: "12px monospace", resize: "none", outline: "none", overflow: "auto"
+        });
+        // Keep the game from reacting to keys typed in the box
+        ta.addEventListener("keydown", (e) => {
+            e.stopPropagation();
+            if (e.key === "Escape") { e.preventDefault(); dialogRun("cancel"); }
+            else if (e.key === "Enter") { e.preventDefault(); dialogRun("ok"); }
+        });
+        ta.addEventListener("keyup", (e) => e.stopPropagation());
+        document.body.appendChild(ta);
+        dialog.dom = ta;
+        positionDialogDom();
+        ta.focus();
+        ta.select();
+    } catch (err) {
+        dialog.dom = null;
+    }
+}
+function positionDialogDom() {
+    const d = dialog;
+    if (!d || !d.dom || !d.layout || !d.layout.input) return;
+    const r = canvas.getBoundingClientRect();
+    const sx = r.width / canvas.width, sy = r.height / canvas.height, f = d.layout.input;
+    const st = d.dom.style;
+    st.left = (r.left + f.x * sx) + "px";
+    st.top = (r.top + f.y * sy) + "px";
+    st.width = (f.w * sx) + "px";
+    st.height = (f.h * sy) + "px";
+}
+function removeDialogDom() {
+    if (dialog && dialog.dom) {
+        try { dialog.dom.blur(); document.body.removeChild(dialog.dom); } catch (err) {}
+        dialog.dom = null;
+    }
+}
+
+function showDialog(d) {
+    closeDialogSilently();
+    movingLeft = movingRight = movingUp = movingDown = false;
+    dialog = d;
+    layoutDialog();
+    dialogObj = new GObject();
+    dialogObj.draw = drawDialog;
+    dialogObj.layer = 60;
+    add(dialogObj);
+    if (d.type === "code") createDialogDom();
+}
+function closeDialogSilently() {
+    removeDialogDom();
+    if (dialogObj) { remove(dialogObj); dialogObj = null; }
+    dialog = null;
+}
+function dialogRun(run) {
+    const d = dialog;
+    if (!d) return;
+    if (d.dom) d.value = d.dom.value;
+    if (typeof run === "function") { run(d); return; }
+    closeDialogSilently();
+    if (run === "ok" && d.onOk) d.onOk(d.value);
+    if (run === "cancel" && d.onCancel) d.onCancel();
+}
+
+function askText(title, initial, onOk, opts) {
+    opts = opts || {};
+    showDialog({
+        type: "input", title: title, text: opts.hint || "", value: String(initial === undefined ? "" : initial),
+        maxLen: opts.maxLen || 24, filter: opts.filter || null, onOk: onOk,
+        buttons: [{ label: "CANCEL", color: "#555", run: "cancel" }, { label: "OK", color: "forestgreen", run: "ok" }]
+    });
+}
+function askConfirm(title, text, onYes, yesLabel) {
+    showDialog({
+        type: "confirm", title: title, text: text, onOk: onYes,
+        buttons: [{ label: "CANCEL", color: "#555", run: "cancel" }, { label: yesLabel || "YES", color: "crimson", run: "ok" }]
+    });
+}
+function showMessage(title, text, onOk) {
+    showDialog({
+        type: "message", title: title, text: text, onOk: onOk, onCancel: onOk,
+        buttons: [{ label: "OK", color: "forestgreen", run: "ok" }]
+    });
+}
+
+function copyToClipboard(text) {
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            return navigator.clipboard.writeText(text).then(() => true, () => false);
+        }
+    } catch (err) {}
+    try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+        return Promise.resolve(ok);
+    } catch (err) {}
+    return Promise.resolve(false);
+}
+
+function dialogAppend(str, replace) {
+    const d = dialog;
+    if (!d || d.type === "confirm" || d.type === "message") return;
+    let clean = "";
+    for (const ch of String(str).replace(/[\r\n]+/g, "")) {
+        if (!d.filter || d.filter.test(ch)) clean += ch;
+    }
+    d.value = (replace ? clean : d.value + clean).slice(0, d.maxLen);
+    d.note = "";
+}
+
+function handleDialogKey(e) {
+    const d = dialog;
+    if (!d) return;
+    if (e.key === "Escape") { dialogRun(d.type === "message" ? "ok" : "cancel"); return; }
+    if (e.key === "Enter") { dialogRun("ok"); return; }
+    if (d.type === "confirm" || d.type === "message" || d.dom) return;
+    if (e.key === "Backspace") { d.value = d.value.slice(0, -1); d.note = ""; return; }
+    if (e.key && e.key.length === 1 && !e.ctrlKey && !e.metaKey) dialogAppend(e.key, false);
+}
+function handleDialogClick(mx, my) {
+    const d = dialog;
+    if (!d || !d.layout) return;
+    for (const b of d.layout.buttons) {
+        if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) { dialogRun(b.run); return; }
+    }
+}
+window.addEventListener("paste", (e) => {
+    if (!dialog || (dialog.type !== "input" && dialog.type !== "code") || dialog.dom) return;
+    const text = e.clipboardData && e.clipboardData.getData ? e.clipboardData.getData("text") : "";
+    if (text) dialogAppend(text, !!dialog.pasteReplaces);
+});
+canvas.addEventListener("mousemove", (e) => {
+    const p = editorCanvasPos(e);
+    uiMouse.x = p.x;
+    uiMouse.y = p.y;
+});
+
+function drawDialog() {
+    const d = dialog;
+    if (!d || !d.layout) return;
+    positionDialogDom();
+    const L = d.layout, bx = L.box;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
+    ctx.fillRect(0, 0, getWidth(), getHeight());
+    ctx.fillStyle = "#1f1f1f";
+    editorRR(bx.x, bx.y, bx.w, bx.h, 14); ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.4)";
+    ctx.lineWidth = 2;
+    editorRR(bx.x, bx.y, bx.w, bx.h, 14); ctx.stroke();
+
+    ctx.fillStyle = "white";
+    ctx.font = "bold 16px Verdana";
+    ctx.fillText(d.title, bx.x + 20, bx.y + 34);
+    ctx.fillStyle = "#cccccc";
+    ctx.font = "12px Verdana";
+    L.lines.forEach((ln, i) => ctx.fillText(ln, bx.x + 20, bx.y + 62 + i * 18));
+
+    if (L.input) {
+        const f = L.input;
+        ctx.fillStyle = "#111111";
+        editorRR(f.x, f.y, f.w, f.h, 8); ctx.fill();
+        ctx.strokeStyle = "white"; ctx.lineWidth = 2;
+        editorRR(f.x, f.y, f.w, f.h, 8); ctx.stroke();
+        if (!d.dom) {
+        let shown = d.value;
+        if (d.compact && shown.length > 44) shown = shown.slice(0, 40) + "… (" + d.value.length + " chars)";
+        ctx.font = "14px Verdana";
+        while (shown.length > 1 && ctx.measureText(shown).width > f.w - 28 && !d.compact) shown = shown.slice(1);
+        ctx.fillStyle = "white";
+        ctx.fillText(shown, f.x + 12, f.y + 24);
+        if (Math.floor(Date.now() / 500) % 2 === 0 && !d.compact) {
+            ctx.fillRect(f.x + 12 + ctx.measureText(shown).width + 2, f.y + 9, 2, 18);
+        }
+        }
+        if (d.note) {
+            ctx.fillStyle = "limegreen";
+            ctx.font = "11px Verdana";
+            ctx.fillText(d.note, f.x, f.y + f.h + 13);
+        }
+    }
+
+    for (const b of L.buttons) {
+        const hover = uiMouse.x >= b.x && uiMouse.x <= b.x + b.w && uiMouse.y >= b.y && uiMouse.y <= b.y + b.h;
+        ctx.fillStyle = b.color;
+        editorRR(b.x, b.y, b.w, b.h, 8); ctx.fill();
+        if (hover) {
+            ctx.fillStyle = "rgba(255,255,255,0.22)";
+            editorRR(b.x, b.y, b.w, b.h, 8); ctx.fill();
+        }
+        ctx.fillStyle = "white";
+        ctx.font = "bold 12px Verdana";
+        ctx.textAlign = "center";
+        ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 4);
+        ctx.textAlign = "left";
+    }
+}
+
+const CUSTOM_WORLDS_KEY = "cubeDash_customWorlds";
+const MAX_CUSTOM_LEVELS = 24;
+let customWorlds = [];
+let activeWorldIdx = -1;
+let activeLevelIdx = 0;
+let customRun = { mode: "test", worldIdx: -1, levelIdx: 0 };
+let customPage = 0;
+
+function cleanName(s, fallback) {
+    s = String(s === null || s === undefined ? "" : s).trim().slice(0, 24);
+    return s || fallback;
+}
+
+function blankGridStrings() {
+    let rows = [];
+    for (let r = 0; r < 15; r++) {
+        let row = "";
+        for (let c = 0; c < 20; c++) row += (r == 0 || r == 14 || c == 0 || c == 19) ? "#" : ".";
+        rows.push(row);
+    }
+    rows[7] = "#P" + ".".repeat(17) + "D";
+    return rows;
+}
+
+function blankLevelData(theme) {
+    return { name: "", grid: blankGridStrings(), theme: theme || 1, speed: 0, tracks: [] };
+}
+
+function sanitizeTracks(raw) {
+    if (!Array.isArray(raw)) return [];
+    return raw
+        .filter(t => t && Array.isArray(t.points) && t.points.length >= 2)
+        .map(t => ({
+            type: t.type === "C" ? "C" : "X",
+            speed: Math.max(0.1, Math.min(20, parseFloat(t.speed) || 2.0)),
+            points: t.points.map(p => ({
+                c: Math.max(0, Math.min(19, parseInt(p.c) || 0)),
+                r: Math.max(0, Math.min(14, parseInt(p.r) || 0))
+            }))
+        }));
+}
+
+function loadCustomWorlds() {
+    try {
+        let saved = JSON.parse(localStorage.getItem(CUSTOM_WORLDS_KEY));
+        if (Array.isArray(saved)) {
+            customWorlds = saved
+                .filter(w => w && Array.isArray(w.levels) && w.levels.length > 0)
+                .map(w => ({
+                    name: cleanName(w.name, "Untitled"),
+                    bestTime: typeof w.bestTime === "number" && w.bestTime > 0 ? w.bestTime : null,
+                    levels: w.levels.map(l => ({
+                        name: cleanName(l && l.name, ""),
+                        grid: (l && Array.isArray(l.grid) && l.grid.length === 15) ? l.grid.map(String) : blankGridStrings(),
+                        theme: Math.max(1, Math.min(TOTAL_WORLDS, parseInt(l && l.theme) || 1)),
+                        speed: Math.max(0, parseFloat(l && l.speed) || 0),
+                        tracks: sanitizeTracks(l && l.tracks)
+                    }))
+                }));
+        }
+    } catch (err) {}
+}
+
+function saveCustomWorlds() {
+    try { localStorage.setItem(CUSTOM_WORLDS_KEY, JSON.stringify(customWorlds)); } catch (err) {}
+}
+loadCustomWorlds();
+
+function commitEditorLevel() {
+    let w = customWorlds[activeWorldIdx];
+    if (!w) return;
+    let lv = w.levels[activeLevelIdx];
+    if (!lv) return;
+    lv.grid = editorGrid.map(r => r.join(""));
+    lv.theme = editorTheme;
+    lv.speed = editorHazardSpeed;
+    // Only save tracks that have at least 2 waypoints
+    lv.tracks = sanitizeTracks(editorTracks);
+    saveCustomWorlds();
+}
+
+function loadEditorLevel(wi, li) {
+    activeWorldIdx = wi;
+    activeLevelIdx = li;
+    let lv = customWorlds[wi].levels[li];
+    editorGrid = lv.grid.map(s => s.split(""));
+    editorTheme = lv.theme;
+    editorHazardSpeed = lv.speed;
+    editorTracks = sanitizeTracks(lv.tracks);
+    activeTrackIdx = editorTracks.length > 0 ? 0 : -1;
+    if (lv.speed > 0) editorLastSpeed = lv.speed;
+}
+
+function startEditWorld(wi) {
+    loadEditorLevel(wi, 0);
+    openLevelEditor();
+}
+function startWorldRun(wi) {
+    customRun = { mode: "world", worldIdx: wi, levelIdx: 0 };
+    playCustomLevel();
+}
+
+// ------------------------------------------------------------
+//  "My Worlds" screen
+// ------------------------------------------------------------
+function csText(str, font, x, y, color, centered) {
+    let t = new Text(str, font);
+    t.setPosition(centered ? (getWidth() - t.getWidth()) / 2 : x, y);
+    t.setColor(color);
+    t.layer = 6;
+    add(t);
+    uiElements.push(t);
+    return t;
+}
+function csButton(label, x, y, w, h, color, font, dy, action, extra) {
+    let r = new Rectangle(w, h);
+    r.setPosition(x, y);
+    r.setColor(color);
+    r.layer = 5;
+    add(r);
+    uiElements.push(r);
+    let t = new Text(label, font);
+    t.setPosition(x + (w - t.getWidth()) / 2, y + h / 2 + dy);
+    t.setColor("moccasin");
+    t.layer = 6;
+    add(t);
+    uiElements.push(t);
+    let b = { x: x, y: y, w: w, h: h, action: action };
+    if (extra) Object.assign(b, extra);
+    worldButtons.push(b);
+}
+
+function showCustomWorlds() {
+    GAME_STATE = "CUSTOM_WORLDS";
+    isPaused = false;
+    stopStopwatch();
+    clearLevel();
+    hideGameplayUI();
+    clearMenuUI();
+    clearEditorUI();
+    background.setColor("sienna");
+
+    csText("Custom Worlds", "28pt Verdana", 0, 62, "moccasin", true);
+
+    const perPage = 5, rowH = 62, listY = 90;
+    let pages = Math.max(1, Math.ceil(customWorlds.length / perPage));
+    customPage = Math.max(0, Math.min(pages - 1, customPage));
+
+    if (customWorlds.length === 0) {
+        csText("No custom worlds.", "13pt Verdana", 0, 230, "peru", true);
+    }
+
+    for (let i = 0; i < perPage; i++) {
+        let wi = customPage * perPage + i;
+        if (wi >= customWorlds.length) break;
+        let w = customWorlds[wi];
+        let y = listY + i * rowH;
+
+        let row = new Rectangle(680, 54);
+        row.setPosition(60, y);
+        row.setColor("saddlebrown");
+        row.layer = 4;
+        add(row);
+        uiElements.push(row);
+
+        // little color chip showing the first level's theme
+        let th = WORLD_THEMES[w.levels[0].theme] || DEFAULT_THEME;
+        let chip = new Rectangle(14, 38);
+        chip.setPosition(70, y + 8);
+        chip.setColor(th.bg);
+        chip.layer = 5;
+        add(chip);
+        uiElements.push(chip);
+
+        csText(w.name, "14pt Verdana", 96, y + 26, "moccasin", false);
+        let meta = w.levels.length + (w.levels.length === 1 ? " level" : " levels") + "  |  Best: " + formatTime(w.bestTime);
+        csText(meta, "10pt Verdana", 96, y + 44, "peru", false);
+
+        csButton("PLAY", 460, y + 7, 62, 40, "forestgreen", "10pt Verdana", 5, "CW_PLAY", { wi: wi });
+        csButton("EDIT", 528, y + 7, 62, 40, "chocolate", "10pt Verdana", 5, "CW_EDIT", { wi: wi });
+        csButton("EXPORT", 596, y + 7, 62, 40, "teal", "10pt Verdana", 5, "CW_EXPORT", { wi: wi });
+        csButton("DELETE", 664, y + 7, 68, 40, "crimson", "10pt Verdana", 5, "CW_DELETE", { wi: wi });
+    }
+
+    if (pages > 1) {
+        csButton("<", 300, 410, 40, 34, "chocolate", "12pt Verdana", 5, "CW_PREV");
+        csText((customPage + 1) + " / " + pages, "11pt Verdana", 0, 433, "moccasin", true);
+        csButton(">", 460, 410, 40, 34, "chocolate", "12pt Verdana", 5, "CW_NEXT");
+    }
+
+    csButton("NEW WORLD", 170, 470, 220, 50, "peru", "13pt Verdana", 6, "CW_NEW");
+    csButton("IMPORT", 410, 470, 220, 50, "teal", "13pt Verdana", 6, "CW_IMPORT");
+    csButton("BACK", 20, 20, 90, 36, "crimson", "11pt Verdana", 5, "BACK_TO_TITLE");
+}
+
+// Returns true if it handled the button
+function handleCustomWorldAction(b) {
+    if (b.action === "CW_NEW") {
+        askText("Name your new world", "My World " + (customWorlds.length + 1), (name) => {
+            customWorlds.push({ name: cleanName(name, "My World " + (customWorlds.length + 1)), bestTime: null, levels: [blankLevelData(1)] });
+            saveCustomWorlds();
+            startEditWorld(customWorlds.length - 1);
+        }, { maxLen: 24 });
+        return true;
+    }
+    if (b.action === "CW_IMPORT") {
+        openImportWorldPrompt();
+        return true;
+    }
+    if (b.action === "CW_EXPORT") {
+        openExportWorldPrompt(b.wi);
+        return true;
+    }
+    if (b.action === "CW_EDIT") { startEditWorld(b.wi); return true; }
+    if (b.action === "CW_PLAY") { startWorldRun(b.wi); return true; }
+    if (b.action === "CW_DELETE") {
+        askConfirm("Delete world?", "Delete \"" + customWorlds[b.wi].name + "\" and all of its levels?", () => {
+            customWorlds.splice(b.wi, 1);
+            saveCustomWorlds();
+            showCustomWorlds();
+        }, "DELETE");
+        return true;
+    }
+    if (b.action === "CW_PREV") { customPage--; showCustomWorlds(); return true; }
+    if (b.action === "CW_NEXT") { customPage++; showCustomWorlds(); return true; }
+    return false;
+}
+
+function setHazardSpeed(v) {
+    v = Math.max(0, Math.min(99, Math.round(v * 100) / 100));
+    editorHazardSpeed = v;
+    if (v > 0) editorLastSpeed = v;
+    renderEditor();
+}
+function setHazardFromX(mx) {
+    let s = editorMenuLayout && editorMenuLayout.slider;
+    if (!s) return;
+    let t = Math.max(0, Math.min(1, (mx - s.x) / s.w));
+    setHazardSpeed(Math.round(t * 3 / 0.05) * 0.05);
+}
+
+function pushCloseX(PX, PY, PW) {
+    editorButtons.push({ x: PX + PW - 42, y: PY + 10, w: 30, h: 30, action: "CLOSE_MENU", group: "menu", isX: true });
+}
+
+function buildHazardPanel() {
+    const PX = 180, PY = 100, PW = 440, PH = 340;
+    editorMenuLayout = { panel: { x: PX, y: PY, w: PW, h: PH }, slider: { x: PX + 40, y: PY + 152, w: PW - 80 } };
+    const G = "menu";
+    pushCloseX(PX, PY, PW);
+    editorButtons.push({ x: PX + 20, y: PY + 64, w: 96, h: 40, action: "HZ_TOGGLE", group: G,
+        label: editorHazardSpeed > 0 ? "ON" : "OFF", color: editorHazardSpeed > 0 ? "forestgreen" : "#666" });
+    editorButtons.push({ x: PX + 30, y: PY + 130, w: PW - 60, h: 44, action: "HZ_SLIDER", group: G });
+    [["-0.25", -0.25], ["-0.05", -0.05], ["+0.05", 0.05], ["+0.25", 0.25]].forEach((s, i) => {
+        editorButtons.push({ x: PX + 20 + i * 104, y: PY + 192, w: 96, h: 32, action: "HZ_STEP", delta: s[1], group: G, label: s[0], color: "#444" });
+    });
+    [["Slow", 0.45], ["Medium", 0.65], ["Fast", 1.0], ["Faster", 2.0]].forEach((s, i) => {
+        editorButtons.push({ x: PX + 20 + i * 104, y: PY + 238, w: 96, h: 32, action: "HZ_SET", value: s[1], group: G,
+            label: s[0] + " " + s[1], color: "#5a4636" });
+    });
+    editorButtons.push({ x: PX + 20, y: PY + 288, w: 200, h: 36, action: "HZ_TYPE", group: G, label: "TYPE SPEED", color: "teal" });
+    editorButtons.push({ x: PX + PW - 120, y: PY + 288, w: 100, h: 36, action: "CLOSE_MENU", group: G, label: "DONE", color: "forestgreen" });
+}
+
+function setTrackSpeed(v) {
+    if (activeTrackIdx < 0 || !editorTracks[activeTrackIdx]) return;
+    v = Math.max(0.25, Math.min(20, Math.round(v * 100) / 100));
+    editorTracks[activeTrackIdx].speed = v;
+    editorLastTrackSpeed = v;
+    renderEditor();
+}
+
+function setTrackSpeedFromX(mx) {
+    let s = editorMenuLayout && editorMenuLayout.slider;
+    if (!s) return;
+    let t = Math.max(0, Math.min(1, (mx - s.x) / s.w));
+    setTrackSpeed(0.25 + Math.round((t * 5.75) / 0.25) * 0.25);
+}
+
+function buildTrackPanel() {
+    const PX = 180, PY = 100, PW = 440, PH = 340;
+    editorMenuLayout = { panel: { x: PX, y: PY, w: PW, h: PH }, slider: { x: PX + 40, y: PY + 152, w: PW - 80 } };
+    const G = "menu";
+    pushCloseX(PX, PY, PW);
+    editorButtons.push({ x: PX + 20, y: PY + 64, w: 110, h: 40, action: "TR_DELETE", group: G, label: "DELETE TRACK", color: "crimson" });
+    editorButtons.push({ x: PX + 30, y: PY + 130, w: PW - 60, h: 44, action: "TR_SLIDER", group: G });
+    [["-0.5", -0.5], ["-0.1", -0.1], ["+0.1", 0.1], ["+0.5", 0.5]].forEach((s, i) => {
+        editorButtons.push({ x: PX + 20 + i * 104, y: PY + 192, w: 96, h: 32, action: "TR_STEP", delta: s[1], group: G, label: s[0], color: "#444" });
+    });
+    [["Slow 1.0", 1.0], ["Med 2.0", 2.0], ["Fast 3.5", 3.5], ["Faster 5.0", 5.0]].forEach((s, i) => {
+        editorButtons.push({ x: PX + 20 + i * 104, y: PY + 238, w: 96, h: 32, action: "TR_SET", value: s[1], group: G, label: s[0], color: "#5a4636" });
+    });
+    editorButtons.push({ x: PX + 20, y: PY + 288, w: 200, h: 36, action: "TR_TYPE", group: G, label: "TYPE SPEED", color: "teal" });
+    editorButtons.push({ x: PX + PW - 120, y: PY + 288, w: 100, h: 36, action: "CLOSE_MENU", group: G, label: "DONE", color: "forestgreen" });
+}
+
+function drawTrackPanel() {
+    const tr = editorTracks[activeTrackIdx];
+    if (!tr) { editorPanel = null; renderEditor(); return; }
+    drawPanelFrame("TRACK #" + (activeTrackIdx + 1) + " (" + (tr.type === "C" ? "ORB" : "BOX") + ")");
+    const p = editorMenuLayout.panel, s = editorMenuLayout.slider;
+    for (const b of editorButtons) {
+        if (b.group === "menu" && b.label) drawPanelBtn(b);
+    }
+    const v = tr.speed;
+    ctx.textAlign = "center";
+    ctx.fillStyle = "darkorange";
+    ctx.font = "bold 32px Verdana";
+    ctx.fillText(String(v), p.x + 280, p.y + 96);
+    ctx.fillStyle = "#bbbbbb";
+    ctx.font = "11px Verdana";
+    ctx.fillText("pixels per tick  |  " + (Math.round(v * 2.5 * 100) / 100) + " tiles per second", p.x + 280, p.y + 118);
+    ctx.textAlign = "left";
+
+    ctx.fillStyle = "#444";
+    editorRR(s.x, s.y - 3, s.w, 6, 3); ctx.fill();
+    const t = Math.max(0, Math.min(1, (v - 0.25) / 5.75));
+    ctx.fillStyle = "darkorange";
+    editorRR(s.x, s.y - 3, s.w * t, 6, 3); ctx.fill();
+
+    ctx.fillStyle = "#999";
+    ctx.font = "10px Verdana";
+    ctx.textAlign = "center";
+    [0.25, 2, 4, 6].forEach((val, idx) => {
+        ctx.fillText(String(val), s.x + (s.w * idx) / 3, s.y + 26);
+    });
+    ctx.textAlign = "left";
+
+    ctx.fillStyle = "white";
+    ctx.beginPath(); ctx.arc(s.x + s.w * t, s.y, 11, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "darkorange";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+}
+
+function buildColorsPanel() {
+    const PX = 90, PW = 620, CW = 88, CH = 78, GAP = 8, PH = 336, PY = 80;
+    editorMenuLayout = { panel: { x: PX, y: PY, w: PW, h: PH } };
+    pushCloseX(PX, PY, PW);
+    for (let n = 1; n <= TOTAL_WORLDS; n++) {
+        let i = n - 1, col = i % 6, row = Math.floor(i / 6);
+        editorButtons.push({
+            x: PX + 26 + col * (CW + GAP), y: PY + 58 + row * (CH + GAP), w: CW, h: CH,
+            action: "PICK_THEME", theme: n, group: "menu"
+        });
+    }
+}
+
+function buildLevelsPanel() {
+    const w = customWorlds[activeWorldIdx];
+    const n = w ? w.levels.length : 0;
+    const PX = 90, PW = 620, CW = 88, CH = 78, GAP = 8, PY = 50;
+    const rows = Math.max(1, Math.ceil(n / 6));
+    const chipsTop = PY + 60;
+    const btnY = chipsTop + rows * (CH + GAP) + 6;
+    const PH = (btnY - PY) + 32 + 8 + 32 + 40;
+    editorMenuLayout = { panel: { x: PX, y: PY, w: PW, h: PH } };
+    pushCloseX(PX, PY, PW);
+    for (let i = 0; i < n; i++) {
+        editorButtons.push({
+            x: PX + 26 + (i % 6) * (CW + GAP), y: chipsTop + Math.floor(i / 6) * (CH + GAP), w: CW, h: CH,
+            action: "LV_PICK", idx: i, group: "menu"
+        });
+    }
+    const row1 = [["ADD LEVEL", "LV_ADD", "forestgreen"], ["DUPLICATE", "LV_DUP", "#5a4636"], ["DELETE", "LV_DEL", "crimson"],
+                  ["< MOVE", "LV_LEFT", "#444"], ["MOVE >", "LV_RIGHT", "#444"]];
+    row1.forEach((s, i) => {
+        editorButtons.push({ x: PX + 23 + i * 116, y: btnY, w: 110, h: 32, action: s[1], group: "menu", label: s[0], color: s[2] });
+    });
+    editorButtons.push({ x: PX + 23, y: btnY + 40, w: 170, h: 32, action: "LV_RENAME", group: "menu", label: "RENAME LEVEL", color: "teal" });
+    editorButtons.push({ x: PX + 201, y: btnY + 40, w: 170, h: 32, action: "LV_WRENAME", group: "menu", label: "RENAME WORLD", color: "teal" });
+}
+
+function buildEditorMenu() {
+    const PX = 90, PY = 44, PW = 620;
+    const CELL_W = 88, CELL_H = 94, GAP = 8;
+    const colX = [PX + 20, PX + 20 + 295];
+    const colY = [PY + 52, PY + 52];
+
+    editorMenuLayout = { panel: { x: PX, y: PY, w: PW, h: 0 }, headers: [] };
+
+    for (const sec of EDITOR_MENU_SECTIONS) {
+        const x0 = colX[sec.col], y0 = colY[sec.col];
+        editorMenuLayout.headers.push({ x: x0, y: y0, w: 280, text: sec.title });
+        sec.items.forEach((t, i) => {
+            const col = i % 3;
+            const row = Math.floor(i / 3);
+            editorButtons.push({
+                x: x0 + col * (CELL_W + GAP),
+                y: y0 + 20 + row * (CELL_H + GAP),
+                w: CELL_W,
+                h: CELL_H,
+                action: t === "~" ? "OPEN_HAZARD" : "MENU_PICK",
+                tile: t,
+                group: "menu"
+            });
+        });
+        const rowsUsed = Math.ceil(sec.items.length / 3);
+        colY[sec.col] += 20 + rowsUsed * (CELL_H + GAP) + 6;
+    }
+
+    editorMenuLayout.panel.h = Math.max(colY[0], colY[1]) - PY + 20;
+    pushCloseX(PX, PY, PW);
+}
+
+
+function openExportWorldPrompt(wi) {
+    const world = customWorlds[wi];
+    if (!world) return;
+
+    const bytes = [];
+    pushTextBytes(bytes, world.name);
+    bytes.push(world.levels.length);
+    for (const lv of world.levels) {
+        pushTextBytes(bytes, lv.name || "");
+        const lvBytes = encodeLevelBytes(lv.grid, lv.theme, lv.speed, lv.tracks);
+        for (const b of lvBytes) bytes.push(b);
+    }
+    bytes.push(levelChecksum(bytes));
+    const code = WORLD_CODE_PREFIX + bytesToB64(bytes);
+
+    showDialog({
+        type: "code", title: "Export: " + world.name, value: code, maxLen: 25000, note: "",
+        compact: true, pasteReplaces: false,
+        text: "Click COPY or Ctrl+C to copy this world's code.",
+        onOk: () => {},
+        buttons: [
+            { label: "CLOSE", color: "#555", run: "cancel" },
+            { label: "COPY", color: "teal", run: (d) => {
+                let ok = false;
+                if (d.dom) {
+                    try { d.dom.focus(); d.dom.select(); ok = document.execCommand("copy"); } catch (err) {}
+                }
+                if (ok) { d.note = "Copied to clipboard"; return; }
+                copyToClipboard(d.dom ? d.dom.value : d.value).then((ok2) => {
+                    d.note = ok2 ? "Copied to clipboard" : "Press Ctrl+C to copy the code.";
+                });
+                if (d.dom) { d.dom.focus(); d.dom.select(); }
+            } }
+        ]
+    });
+}
+
+function buildEditorPanel() {
+    if (editorPanel === "objects") buildEditorMenu();
+    else if (editorPanel === "hazard") buildHazardPanel();
+    else if (editorPanel === "colors") buildColorsPanel();
+    else if (editorPanel === "levels") buildLevelsPanel();
+	else if (editorPanel === "track") buildTrackPanel();
+}
+
+function drawPanelFrame(title) {
+    const p = editorMenuLayout.panel;
+    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.fillRect(0, 0, getWidth(), getHeight());
+    ctx.fillStyle = "#1f1f1f";
+    editorRR(p.x, p.y, p.w, p.h, 14); ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    ctx.lineWidth = 2;
+    editorRR(p.x, p.y, p.w, p.h, 14); ctx.stroke();
+    ctx.fillStyle = "white";
+    ctx.font = "bold 16px Verdana";
+    ctx.fillText(title, p.x + 20, p.y + 34);
+    for (const b of editorButtons) {
+        if (!b.isX) continue;
+        const hover = editorHit(b, editorMouse.x, editorMouse.y);
+        ctx.fillStyle = hover ? "crimson" : "rgba(255,255,255,0.15)";
+        editorRR(b.x, b.y, b.w, b.h, 6); ctx.fill();
+        ctx.strokeStyle = "white"; ctx.lineWidth = 2; ctx.lineCap = "round";
+        ctx.beginPath();
+        ctx.moveTo(b.x + 9, b.y + 9); ctx.lineTo(b.x + b.w - 9, b.y + b.h - 9);
+        ctx.moveTo(b.x + b.w - 9, b.y + 9); ctx.lineTo(b.x + 9, b.y + b.h - 9);
+        ctx.stroke();
+    }
+}
+function drawPanelBtn(b) {
+    const hover = editorHit(b, editorMouse.x, editorMouse.y);
+    ctx.fillStyle = b.color || "#444";
+    editorRR(b.x, b.y, b.w, b.h, 8); ctx.fill();
+    if (hover) {
+        ctx.fillStyle = "rgba(255,255,255,0.22)";
+        editorRR(b.x, b.y, b.w, b.h, 8); ctx.fill();
+    }
+    ctx.fillStyle = "white";
+    ctx.font = "bold 11px Verdana";
+    ctx.textAlign = "center";
+    ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 4);
+    ctx.textAlign = "left";
+}
+
+function drawHazardPanel() {
+    drawPanelFrame("HAZARD WALL SPEED");
+    const p = editorMenuLayout.panel, s = editorMenuLayout.slider;
+    for (const b of editorButtons) {
+        if (b.group === "menu" && b.label) drawPanelBtn(b);
+    }
+    // readout
+    const v = editorHazardSpeed;
+    ctx.textAlign = "center";
+    ctx.fillStyle = v > 0 ? "orangered" : "#888";
+    ctx.font = "bold 32px Verdana";
+    ctx.fillText(v > 0 ? String(v) : "OFF", p.x + 270, p.y + 96);
+    ctx.fillStyle = "#bbbbbb";
+    ctx.font = "11px Verdana";
+    ctx.fillText(v > 0 ? "pixels per tick  |  " + (Math.round(v * 2.5 * 100) / 100) + " tiles per second" : "hazard wall is off", p.x + 270, p.y + 118);
+    ctx.textAlign = "left";
+    // slider
+    ctx.fillStyle = "#444";
+    editorRR(s.x, s.y - 3, s.w, 6, 3); ctx.fill();
+    const t = Math.max(0, Math.min(1, v / 3));
+    if (t > 0) {
+        ctx.fillStyle = "orangered";
+        editorRR(s.x, s.y - 3, s.w * t, 6, 3); ctx.fill();
+    }
+    ctx.fillStyle = "#999";
+    ctx.font = "10px Verdana";
+    ctx.textAlign = "center";
+    for (let k = 0; k <= 3; k++) ctx.fillText(String(k), s.x + (s.w * k) / 3, s.y + 26);
+    ctx.textAlign = "left";
+    ctx.fillStyle = "white";
+    ctx.beginPath(); ctx.arc(s.x + s.w * t, s.y, 11, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = v > 0 ? "orangered" : "#888";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    if (v > 3) {
+        ctx.fillStyle = "#bbbbbb";
+        ctx.font = "10px Verdana";
+        ctx.fillText("set by typing", s.x + s.w - 170, s.y - 14);
+    }
+}
+
+function drawColorsPanel() {
+    drawPanelFrame("COLOR THEMES");
+    const p = editorMenuLayout.panel;
+    let hovered = null;
+    for (const b of editorButtons) {
+        if (b.action !== "PICK_THEME") continue;
+        const th = WORLD_THEMES[b.theme];
+        const hover = editorHit(b, editorMouse.x, editorMouse.y);
+        if (hover) hovered = b;
+        ctx.fillStyle = th.bg;
+        editorRR(b.x, b.y, b.w, b.h, 10); ctx.fill();
+        // mini preview of the theme's wall, door and player colors
+        ctx.fillStyle = th.wall;   ctx.fillRect(b.x + 12, b.y + 12, 18, 18);
+        ctx.fillStyle = th.door;   ctx.fillRect(b.x + 35, b.y + 12, 18, 18);
+        ctx.fillStyle = th.player; ctx.fillRect(b.x + 59, b.y + 15, 12, 12);
+        ctx.fillStyle = "rgba(0,0,0,0.55)";
+        ctx.fillRect(b.x, b.y + b.h - 22, b.w, 22);
+        ctx.fillStyle = "white";
+        ctx.font = "9px Verdana";
+        ctx.textAlign = "center";
+        ctx.fillText(th.bg, b.x + b.w / 2, b.y + b.h - 8);
+        ctx.fillText("W" + b.theme, b.x + 14, b.y + 47);
+        ctx.textAlign = "left";
+        if (hover) {
+            ctx.fillStyle = "rgba(255,255,255,0.18)";
+            editorRR(b.x, b.y, b.w, b.h, 10); ctx.fill();
+        }
+        if (b.theme === editorTheme) {
+            ctx.strokeStyle = "white"; ctx.lineWidth = 3;
+            editorRR(b.x - 1, b.y - 1, b.w + 2, b.h + 2, 11); ctx.stroke();
+        }
+    }
+    ctx.fillStyle = "#cccccc";
+    ctx.font = "11px Verdana";
+    ctx.fillText(hovered ? "World " + hovered.theme + ": " + WORLD_THEMES[hovered.theme].bg + " background"
+                         : "Each color also sets the matching wall, door and player colors.",
+                 p.x + 20, p.y + p.h - 14);
+}
+
+function drawLevelThumb(rows, themeNum, x, y, px) {
+    const th = WORLD_THEMES[themeNum] || DEFAULT_THEME;
+    ctx.fillStyle = th.bg;
+    ctx.fillRect(x, y, 20 * px, 15 * px);
+    for (let r = 0; r < 15; r++) {
+        for (let c = 0; c < 20; c++) {
+            const t = rows[r] ? rows[r][c] : ".";
+            let col = null;
+            if (t === "#") col = th.wall;
+            else if (t === "X" || t === "C") col = "crimson";
+            else if (t === "D") col = th.door;
+            else if (t === "L" || t === "K") col = LOCK_COLOR;
+            else if (t === "F") col = FAKE_KEY_COLOR;
+            else if (t === "H") col = "limeGreen";
+            else if (t === "T") col = "cyan";
+            else if (t === "S") col = "yellow";
+            else if (t === "P") col = th.player;
+            if (col) { ctx.fillStyle = col; ctx.fillRect(x + c * px, y + r * px, px, px); }
+        }
+    }
+}
+
+function drawLevelsPanel() {
+    const w = customWorlds[activeWorldIdx];
+    if (!w) return;
+    drawPanelFrame(w.name);
+    const p = editorMenuLayout.panel;
+    ctx.fillStyle = "#aaaaaa";
+    ctx.font = "11px Verdana";
+    ctx.fillText(w.levels.length + " / " + MAX_CUSTOM_LEVELS + " levels", p.x + 20, p.y + 52);
+
+    for (const b of editorButtons) {
+        if (b.group !== "menu") continue;
+        if (b.label) { drawPanelBtn(b); continue; }
+        if (b.action !== "LV_PICK") continue;
+        const lv = w.levels[b.idx];
+        const hover = editorHit(b, editorMouse.x, editorMouse.y);
+        ctx.fillStyle = "#2c2c2c";
+        editorRR(b.x, b.y, b.w, b.h, 10); ctx.fill();
+        if (hover) {
+            ctx.fillStyle = "rgba(255,255,255,0.15)";
+            editorRR(b.x, b.y, b.w, b.h, 10); ctx.fill();
+        }
+        // The level being edited shows live; the others show their saved version
+        const rows = (b.idx === activeLevelIdx) ? editorGrid.map(r => r.join("")) : lv.grid;
+        const th = (b.idx === activeLevelIdx) ? editorTheme : lv.theme;
+        drawLevelThumb(rows, th, b.x + 14, b.y + 7, 3);
+        ctx.fillStyle = "rgba(0,0,0,0.65)";
+        editorRR(b.x + 4, b.y + 4, 18, 14, 4); ctx.fill();
+        ctx.fillStyle = "white";
+        ctx.font = "bold 9px Verdana";
+        ctx.textAlign = "center";
+        ctx.fillText(String(b.idx + 1), b.x + 13, b.y + 14);
+        let label = lv.name || ("Level " + (b.idx + 1));
+        if (label.length > 13) label = label.slice(0, 12) + "…";
+        ctx.font = "10px Verdana";
+        ctx.fillText(label, b.x + b.w / 2, b.y + 68);
+        ctx.textAlign = "left";
+        if (b.idx === activeLevelIdx) {
+            ctx.strokeStyle = "white"; ctx.lineWidth = 3;
+            editorRR(b.x - 1, b.y - 1, b.w + 2, b.h + 2, 11); ctx.stroke();
+        }
+    }
+}
+
+function drawEditorPanel() {
+    if (!editorPanel || !editorMenuLayout) return;
+    if (editorPanel === "objects") drawEditorMenu();
+    else if (editorPanel === "hazard") drawHazardPanel();
+    else if (editorPanel === "colors") drawColorsPanel();
+    else if (editorPanel === "levels") drawLevelsPanel();
+	else if (editorPanel === "track") drawTrackPanel();
+
+}
+
+// ------------------------------------------------------------
+//  Level setup / rendering
+// ------------------------------------------------------------
+function initBlankEditorGrid() {
+    editorGrid = blankGridStrings().map(s => s.split(""));
+}
+
+function openLevelEditor() {
+    if (activeWorldIdx < 0 || !customWorlds[activeWorldIdx]) {
+        showCustomWorlds();
+        return;
+    }
+    GAME_STATE = "EDITOR";
+    isPaused = false;
+    editorPanel = null;
+    stopStopwatch();
+    clearLevel();
+    hideGameplayUI();
+    clearMenuUI();
+    clearEditorUI();
+    if (editorGrid.length === 0) initBlankEditorGrid();
+    renderEditor();
+}
+
+function exitEditor() {
+    commitEditorLevel();
+    editorPanel = null;
+    clearEditorUI();
+    showCustomWorlds();
+}
+
+function clearEditorUI() {
+    for (let i = 0; i < editorUI.length; i++) {
+        remove(editorUI[i]);
+    }
+    editorUI = [];
+    editorButtons = [];
+    editorMenuLayout = null;
+}
+
+function buildEditorBottomButtons() {
+    const barY = getHeight() - EDITOR_BOTTOM_H;
+    const slot = 38, sy = barY + (EDITOR_BOTTOM_H - slot) / 2;
+
+    editorButtons.push({ x: 10, y: sy, w: 84, h: slot, action: "OPEN_MENU", group: "bar" });
+
+    for (let i = 0; i < editorRecent.length; i++) {
+        editorButtons.push({
+            x: 104 + i * (slot + 6), y: sy, w: slot, h: slot,
+            action: "SELECT_RECENT", tile: editorRecent[i], group: "bar"
+        });
+    }
+
+    // The eraser is always one click away, like in Mario Maker
+    editorButtons.push({
+        x: getWidth() - 10 - slot, y: sy, w: slot, h: slot,
+        action: "SELECT_TOOL", tile: ".", group: "bar"
+    });
+}
+
+function renderEditor() {
+    clearLevel();
+    clearEditorUI();
+
+    let theme = WORLD_THEMES[editorTheme] || DEFAULT_THEME;
+    BACKGROUND_COLOR = theme.bg;
+    WALL_COLOR = theme.wall;
+    PLAYER_COLOR = theme.player;
+    OBSTACLE_COLOR = "crimson";
+    DOOR_COLOR = theme.door;
+    GUI_COLOR = theme.gui;
+    background.setColor(BACKGROUND_COLOR);
+
+    // Build map strings and use the real game's loadMap() so it looks 100% authentic
+    let mapStrings = editorGrid.map(row => row.join(""));
+
+    // Temporarily create dummy player if needed for "P" tile preview
+    if (!player) {
+        player = new Rectangle(PLAYER_SIZE, PLAYER_SIZE);
+        player.setColor(PLAYER_COLOR);
+        player.layer = 3;
+        add(player);
+    }
+    loadMap(mapStrings);
+	
+	    for (let i = 0; i < editorTracks.length; i++) {
+        let tr = editorTracks[i];
+        if (tr.points.length >= 2) {
+			addTrackObstacle(tr.type, tr.points, 0);
+		} else if (tr.points.length === 1) {
+			addTrackObstacle(tr.type, [tr.points[0], tr.points[0]], 0);
+		}
+		if (i === activeTrackIdx && tr.points.length > 0) {
+			let p0 = tr.points[0];
+			addEditorLayer(4.5, () => {
+				ctx.strokeStyle = "gold";
+				ctx.lineWidth = 3;
+				ctx.strokeRect(p0.c * TILE_SIZE + 2, p0.r * TILE_SIZE + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+			});
+		}
+    }
+
+    // Position player marker accurately on the 'P' tile
+    for (let r = 0; r < 15; r++) {
+        for (let c = 0; c < 20; c++) {
+            if (editorGrid[r][c] === "P") {
+                player.setPosition(
+                    c * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2,
+                    r * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2
+                );
+            }
+        }
+    }
+
+    // Subtle grid lines + hovered-cell preview
+    addEditorLayer(4, drawEditorGridLines);
+    addEditorLayer(7, drawEditorCursor);
+
+    // Top HUD Bar
+    let topBar = new Rectangle(getWidth(), EDITOR_TOP_H);
+    topBar.setPosition(0, 0);
+    topBar.setColor("rgba(0, 0, 0, 0.75)");
+    topBar.layer = 8;
+    add(topBar);
+    editorUI.push(topBar);
+
+    let world = customWorlds[activeWorldIdx];
+    let title = world
+        ? world.name.slice(0, 18) + " | Level " + (activeLevelIdx + 1) + "/" + world.levels.length
+        : "Level Editor";
+    let modeLabel = new Text(title, "10pt Verdana");
+    modeLabel.setPosition(12, 23);
+    modeLabel.setColor("moccasin");
+    modeLabel.layer = 9;
+    add(modeLabel);
+    editorUI.push(modeLabel);
+
+    function addTopBtn(text, x, w, color, action) {
+        let btn = new Rectangle(w, 26);
+        btn.setPosition(x, 5);
+        btn.setColor(color);
+        btn.layer = 9;
+        add(btn);
+        editorUI.push(btn);
+
+        let lbl = new Text(text, "9pt Verdana");
+        lbl.setPosition(x + (w - lbl.getWidth()) / 2, 22);
+        lbl.setColor("white");
+        lbl.layer = 10;
+        add(lbl);
+        editorUI.push(lbl);
+
+        editorButtons.push({ x: x, y: 5, w: w, h: 26, action: action, group: "top" });
+    }
+
+    const topDefs = [
+        ["LEVELS", 64, "slateblue", "OPEN_LEVELS"],
+        ["COLORS", 64, "#9a5fd6", "OPEN_COLORS"],
+		["TRACK", 58, activeTrackIdx >= 0 ? "darkorange" : "#555", "OPEN_TRACK"],
+        ["WALL", 52, editorHazardSpeed > 0 ? "orangered" : "#555", "OPEN_HAZARD"],
+        ["CLEAR", 54, "#555", "CLEAR_MAP"],
+        ["EXPORT", 50, "teal", "CODE_MENU"],
+        ["PLAY", 54, "forestgreen", "TEST_PLAY"],
+        ["EXIT", 50, "crimson", "EXIT_EDITOR"]
+    ];
+    let tx = getWidth() - 8;
+    for (let i = topDefs.length - 1; i >= 0; i--) {
+        tx -= topDefs[i][1];
+        addTopBtn(topDefs[i][0], tx, topDefs[i][1], topDefs[i][2], topDefs[i][3]);
+        tx -= 6;
+    }
+
+    // Bottom palette: [ALL] [recent objects ...]   info   [eraser]
+    buildEditorBottomButtons();
+    addEditorLayer(11, drawEditorBottomBar);
+
+    // Popup panels on top of everything
+    if (editorPanel) {
+        buildEditorPanel();
+        addEditorLayer(20, drawEditorPanel);
+    }
+}
+
+// ------------------------------------------------------------
+//  Input
+// ------------------------------------------------------------
+function findTrackAt(c, r) {
+    for (let i = editorTracks.length - 1; i >= 0; i--) {
+        if (editorTracks[i].points.some(p => p.c === c && p.r === r)) return i;
+    }
+    return -1;
+}
+
+function paintTileAt(mx, my, isInitialClick) {
+    if (editorPanel) return;
+    if (my < EDITOR_TOP_H || my > getHeight() - EDITOR_BOTTOM_H) return;
+    let c = Math.floor(mx / TILE_SIZE);
+    let r = Math.floor(my / TILE_SIZE);
+    if (r < 0 || r >= 15 || c < 0 || c >= 20) return;
+
+    // 1. Track Box ("=") or Track Orb ("O")
+    if (selectedTool === "=" || selectedTool === "O") {
+        const trackType = selectedTool === "=" ? "X" : "C";
+        if (isInitialClick) {
+            const hitIdx = findTrackAt(c, r);
+            if (hitIdx >= 0 && editorTracks[hitIdx].points.length >= 2) {
+                // Clicking an existing track selects it so you can adjust its speed
+                activeTrackIdx = hitIdx;
+                renderEditor();
+                return;
+            }
+            // Start a brand-new track
+            editorTracks.push({
+                type: trackType,
+                speed: editorLastTrackSpeed,
+                points: [{ c, r }]
+            });
+            activeTrackIdx = editorTracks.length - 1;
+            renderEditor();
+        } else if (activeTrackIdx >= 0 && editorTracks[activeTrackIdx]) {
+            let pts = editorTracks[activeTrackIdx].points;
+            let last = pts[pts.length - 1];
+            if (last.c === c && last.r === r) return;
+            // If dragging back onto the previous point, undo the last step
+            if (pts.length >= 2 && pts[pts.length - 2].c === c && pts[pts.length - 2].r === r) {
+                pts.pop();
+            } else {
+                pts.push({ c, r });
+            }
+            renderEditor();
+        }
+        return;
+    }
+
+    // 2. Eraser removes a track if one is under the cursor
+    if (selectedTool === ".") {
+        const hitIdx = findTrackAt(c, r);
+        if (hitIdx >= 0) {
+            editorTracks.splice(hitIdx, 1);
+            activeTrackIdx = editorTracks.length > 0 ? Math.min(activeTrackIdx, editorTracks.length - 1) : -1;
+            renderEditor();
+            return;
+        }
+    }
+
+    // 3. Normal single-tile placement
+    if (selectedTool === "P") {
+        for (let rr = 0; rr < 15; rr++) {
+            for (let cc = 0; cc < 20; cc++) {
+                if (editorGrid[rr][cc] === "P") editorGrid[rr][cc] = ".";
+            }
+        }
+    }
+
+    if (editorGrid[r][c] !== selectedTool) {
+        editorGrid[r][c] = selectedTool;
+        renderEditor();
+    }
+}
+
+
+function activeEditorButtons() {
+    return editorButtons.filter(btn => editorPanel ? btn.group === "menu" : true);
+}
+
+function handleEditorClick(mx, my) {
+    let b = activeEditorButtons().find(btn => editorHit(btn, mx, my));
+
+    if (!b) {
+        if (editorPanel) {
+            // Clicking the dark area outside the panel closes it
+            let p = editorMenuLayout.panel;
+            if (mx < p.x || mx > p.x + p.w || my < p.y || my > p.y + p.h) {
+                editorPanel = null;
+                renderEditor();
+            }
+            return;
+        }
+		paintTileAt(mx, my, true);
+        if (GAME_STATE === "EDITOR") commitEditorLevel();
+        return;
+    }
+
+    const world = customWorlds[activeWorldIdx];
+    switch (b.action) {
+        case "OPEN_MENU":    editorPanel = "objects"; renderEditor(); break;
+        case "OPEN_LEVELS":  editorPanel = "levels"; renderEditor(); break;
+        case "OPEN_COLORS":  editorPanel = "colors"; renderEditor(); break;
+        case "OPEN_HAZARD":  editorPanel = "hazard"; renderEditor(); break;
+        case "CLOSE_MENU":   editorPanel = null; renderEditor(); break;
+        case "MENU_PICK":    selectTool(b.tile, false); editorPanel = null; renderEditor(); break;
+        case "SELECT_RECENT": selectTool(b.tile, true); renderEditor(); break;
+        case "SELECT_TOOL":  selectTool(b.tile, false); renderEditor(); break;
+        case "PICK_THEME":   editorTheme = b.theme; editorPanel = null; renderEditor(); break;
+
+        case "HZ_TOGGLE":    setHazardSpeed(editorHazardSpeed > 0 ? 0 : (editorLastSpeed || 0.65)); break;
+        case "HZ_STEP":      setHazardSpeed(editorHazardSpeed + b.delta); break;
+        case "HZ_SET":       setHazardSpeed(b.value); break;
+        case "HZ_SLIDER":    setHazardFromX(mx); break;
+        case "HZ_TYPE":
+            askText("Hazard wall speed", String(editorHazardSpeed), (input) => {
+                let v = parseFloat(input);
+                if (isFinite(v) && v >= 0) setHazardSpeed(v);
+            }, { maxLen: 6, filter: /[0-9.]/, hint: "Pixels per tick. 0 turns the wall off. The game's levels use 0.45 to 1.0." });
+            break;
+
+        case "CLEAR_MAP":
+            askConfirm("Clear this level?", "Every object in this level will be removed.", () => {
+                initBlankEditorGrid();
+				editorTracks = []; activeTrackIdx = -1;
+                renderEditor();
+                commitEditorLevel();
+            }, "CLEAR");
+            break;
+        case "CODE_MENU": openLevelCodePrompt(); break;
+        case "TEST_PLAY":
+            commitEditorLevel();
+            customRun = { mode: "test", worldIdx: activeWorldIdx, levelIdx: activeLevelIdx };
+            playCustomLevel();
+            return;
+        case "EXIT_EDITOR": exitEditor(); return;
+
+        case "LV_PICK":
+            commitEditorLevel();
+            loadEditorLevel(activeWorldIdx, b.idx);
+            editorPanel = null;
+            renderEditor();
+            break;
+        case "LV_ADD":
+            if (world.levels.length >= MAX_CUSTOM_LEVELS) { showMessage("Level limit", "A world can have up to " + MAX_CUSTOM_LEVELS + " levels."); break; }
+            commitEditorLevel();
+            world.levels.push(blankLevelData(editorTheme));
+            loadEditorLevel(activeWorldIdx, world.levels.length - 1);
+            editorPanel = null;
+            renderEditor();
+            break;
+        case "LV_DUP":
+            if (world.levels.length >= MAX_CUSTOM_LEVELS) { showMessage("Level limit", "A world can have up to " + MAX_CUSTOM_LEVELS + " levels."); break; }
+            commitEditorLevel();
+            world.levels.splice(activeLevelIdx + 1, 0, JSON.parse(JSON.stringify(world.levels[activeLevelIdx])));
+            loadEditorLevel(activeWorldIdx, activeLevelIdx + 1);
+            renderEditor();
+            break;
+        case "LV_DEL":
+            if (world.levels.length <= 1) { showMessage("Can't delete", "A world needs at least one level."); break; }
+            askConfirm("Delete level " + (activeLevelIdx + 1) + "?", "This level will be removed from the world.", () => {
+                world.levels.splice(activeLevelIdx, 1);
+                loadEditorLevel(activeWorldIdx, Math.min(activeLevelIdx, world.levels.length - 1));
+                saveCustomWorlds();
+                renderEditor();
+            }, "DELETE");
+            break;
+        case "LV_LEFT":
+        case "LV_RIGHT": {
+            let to = activeLevelIdx + (b.action === "LV_LEFT" ? -1 : 1);
+            if (to < 0 || to >= world.levels.length) break;
+            commitEditorLevel();
+            let tmp = world.levels[to];
+            world.levels[to] = world.levels[activeLevelIdx];
+            world.levels[activeLevelIdx] = tmp;
+            activeLevelIdx = to;
+            saveCustomWorlds();
+            renderEditor();
+            break;
+        }
+        case "LV_RENAME":
+            askText("Name this level", world.levels[activeLevelIdx].name, (input) => {
+                world.levels[activeLevelIdx].name = cleanName(input, "");
+                saveCustomWorlds();
+                renderEditor();
+            }, { maxLen: 24, hint: "Leave it empty to use \"Level " + (activeLevelIdx + 1) + "\"." });
+            break;
+        case "LV_WRENAME":
+            askText("Name this world", world.name, (input) => {
+                world.name = cleanName(input, world.name);
+                saveCustomWorlds();
+                renderEditor();
+            }, { maxLen: 24 });
+            break;
+		case "OPEN_TRACK":
+            if (activeTrackIdx < 0 || !editorTracks[activeTrackIdx]) {
+                showMessage("No track selected", "Select Moving Box or Moving Orb and drag across tiles to draw a track.");
+                break;
+            }
+            editorPanel = "track";
+            renderEditor();
+            break;
+        case "TR_SLIDER": setTrackSpeedFromX(mx); break;
+        case "TR_STEP":   setTrackSpeed((editorTracks[activeTrackIdx]?.speed || 2.0) + b.delta); break;
+        case "TR_SET":    setTrackSpeed(b.value); break;
+        case "TR_TYPE":
+            askText("Track obstacle speed", String(editorTracks[activeTrackIdx]?.speed || 2.0), (input) => {
+                let v = parseFloat(input);
+                if (isFinite(v) && v > 0) setTrackSpeed(v);
+            }, { maxLen: 6, filter: /[0-9.]/, hint: "Pixels per tick (e.g. 1.0 = slow, 2.0 = medium, 4.0 = fast)." });
+            break;
+        case "TR_DELETE":
+            if (activeTrackIdx >= 0) {
+                editorTracks.splice(activeTrackIdx, 1);
+                activeTrackIdx = editorTracks.length > 0 ? 0 : -1;
+            }
+            editorPanel = null;
+            renderEditor();
+            break;
+    }
+    if (GAME_STATE === "EDITOR") commitEditorLevel();
+}
+
+function handleEditorKey(e) {
+    if (e.key === "Escape") {
+        if (editorPanel) {
+            editorPanel = null;
+            renderEditor();
+        } else {
+            exitEditor();
+        }
+        return;
+    }
+
+    if (e.key === "m" || e.key === "M") {
+        editorPanel = editorPanel === "objects" ? null : "objects";
+        renderEditor();
+    }
+}
+
+// Click-and-drag painting + hover tracking
+canvas.addEventListener("mousedown", (e) => {
+    if (GAME_STATE !== "EDITOR" || dialog) return;
+    const pos = editorCanvasPos(e);
+    if (editorPanel === "hazard") {
+        const s = editorButtons.find(btn => btn.action === "HZ_SLIDER" && editorHit(btn, pos.x, pos.y));
+        if (s) {
+            editorSliderDrag = true;
+            setHazardFromX(pos.x);
+        }
+        return;
+    }
+	if (editorPanel === "track") {
+        const t = editorButtons.find(btn => btn.action === "TR_SLIDER" && editorHit(btn, pos.x, pos.y));
+        if (t) {
+            editorSliderDrag = true;
+            setTrackSpeedFromX(pos.x);
+        }
+        return;
+    }
+    // Only start a paint-drag if the press began on the grid (not on a button or a panel)
+    isMouseDown = !editorPanel &&
+        pos.y >= EDITOR_TOP_H && pos.y <= getHeight() - EDITOR_BOTTOM_H;
+	if (isMouseDown) paintTileAt(pos.x, pos.y, true);
+});
+
+canvas.addEventListener("mousemove", (e) => {
+    if (GAME_STATE !== "EDITOR") {
+        if (canvas.style.cursor !== "default") canvas.style.cursor = "default";
+        return;
+    }
+    const pos = editorCanvasPos(e);
+    editorMouse.x = pos.x;
+    editorMouse.y = pos.y;
+    if (editorSliderDrag) editorPanel === "track" ? setTrackSpeedFromX(pos.x) : setHazardFromX(pos.x);
+    if (isMouseDown) paintTileAt(pos.x, pos.y, false);
+
+    const onButton = activeEditorButtons().some(btn => editorHit(btn, pos.x, pos.y));
+    canvas.style.cursor = onButton ? "pointer" : "default";
+});
+
+canvas.addEventListener("mouseleave", () => {
+    editorMouse.x = -1;
+    editorMouse.y = -1;
+});
+
+window.addEventListener("mouseup", () => {
+    isMouseDown = false;
+    editorSliderDrag = false;
+	editorTracks = editorTracks.filter(t => t.points.length >= 2); 
+	activeTrackIdx = Math.min(activeTrackIdx, editorTracks.length - 1);
+    if (GAME_STATE === "EDITOR") commitEditorLevel();
+});
+
+const LEVEL_CODE_PREFIX = "CD2";
+const WORLD_CODE_PREFIX = "CDW1";
+const LEVEL_CODE_TILES = ".#XCDKLFHTSP";
+const B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+function bytesToB64(bytes) {
+    let out = "";
+    for (let i = 0; i < bytes.length; i += 3) {
+        const b0 = bytes[i];
+        const b1 = i + 1 < bytes.length ? bytes[i + 1] : 0;
+        const b2 = i + 2 < bytes.length ? bytes[i + 2] : 0;
+        const n = (b0 << 16) | (b1 << 8) | b2;
+        out += B64_CHARS[(n >> 18) & 63] + B64_CHARS[(n >> 12) & 63];
+        if (i + 1 < bytes.length) out += B64_CHARS[(n >> 6) & 63];
+        if (i + 2 < bytes.length) out += B64_CHARS[n & 63];
+    }
+    return out;
+}
+
+function b64ToBytes(str) {
+    const vals = [];
+    for (const ch of str) {
+        const v = B64_CHARS.indexOf(ch);
+        if (v < 0) return null;
+        vals.push(v);
+    }
+    if (vals.length % 4 === 1) return null;
+    const bytes = [];
+    for (let i = 0; i < vals.length; i += 4) {
+        const n = (vals[i] << 18) | (vals[i + 1] << 12) | ((vals[i + 2] || 0) << 6) | (vals[i + 3] || 0);
+        bytes.push((n >> 16) & 255);
+        if (i + 2 < vals.length) bytes.push((n >> 8) & 255);
+        if (i + 3 < vals.length) bytes.push(n & 255);
+    }
+    return bytes;
+}
+
+function levelChecksum(bytes) {
+    let c = 7;
+    for (const b of bytes) c = (c * 31 + b) & 255;
+    return c;
+}
+
+function encodeLevelBytes(gridRows, theme, hazardSpeed, tracks) {
+    const flat = gridRows.join("");
+    const idx = [];
+    for (const ch of flat) {
+        const t = LEVEL_CODE_TILES.indexOf(ch);
+        idx.push(t < 0 ? 0 : t);
+    }
+    const packed = [];
+    for (let i = 0; i < idx.length; i += 2) {
+        packed.push((idx[i] << 4) | (i + 1 < idx.length ? idx[i + 1] : 0));
+    }
+    const rle = [];
+    for (let i = 0; i < idx.length;) {
+        let j = i;
+        while (j < idx.length && idx[j] === idx[i] && j - i < 16) j++;
+        rle.push((idx[i] << 4) | (j - i - 1));
+        i = j;
+    }
+    const useRle = rle.length < packed.length;
+    const speed = Math.max(0, Math.min(9900, Math.round(hazardSpeed * 100)));
+    const out = [useRle ? 1 : 0, theme, speed >> 8, speed & 255].concat(useRle ? rle : packed);
+
+    // Append moving tracks (1 byte count + per track: type, speed*100 (2B), pointCount, 2B per (c, r))
+    const validTracks = sanitizeTracks(tracks);
+    out.push(validTracks.length);
+    for (const tr of validTracks) {
+        out.push(tr.type === "C" ? 1 : 0);
+        const tSpd = Math.max(1, Math.min(9900, Math.round(tr.speed * 100)));
+        out.push(tSpd >> 8, tSpd & 255);
+        out.push(tr.points.length);
+        for (const pt of tr.points) {
+            out.push(pt.c, pt.r);
+        }
+    }
+    return out;
+}
+
+function decodeLevelBytes(bytes, offset) {
+    if (offset + 4 > bytes.length) return null;
+    const mode = bytes[offset];
+    const theme = bytes[offset + 1];
+    if (mode > 1 || theme < 1 || theme > TOTAL_WORLDS) return null;
+    const speed = ((bytes[offset + 2] << 8) | bytes[offset + 3]) / 100;
+    const idx = [];
+    let pos = offset + 4;
+    while (idx.length < 300 && pos < bytes.length) {
+        const b = bytes[pos++];
+        if (mode === 0) {
+            idx.push(b >> 4, b & 15);
+        } else {
+            const run = (b & 15) + 1;
+            for (let k = 0; k < run; k++) idx.push(b >> 4);
+        }
+    }
+    if (idx.length !== 300 || idx.some(t => t >= LEVEL_CODE_TILES.length)) return null;
+    const flat = idx.map(t => LEVEL_CODE_TILES[t]).join("");
+    const grid = [];
+    for (let r = 0; r < 15; r++) {
+        grid.push(flat.slice(r * 20, (r + 1) * 20));
+    }
+    const tracks = [];
+    if (pos < bytes.length) {
+        const trackCount = bytes[pos++];
+        for (let t = 0; t < trackCount; t++) {
+            if (pos + 4 > bytes.length) return null;
+            const tType = bytes[pos++] === 1 ? "C" : "X";
+            const tSpd = ((bytes[pos] << 8) | bytes[pos + 1]) / 100;
+            pos += 2;
+            const ptCount = bytes[pos++];
+            if (ptCount < 2 || pos + ptCount * 2 > bytes.length) return null;
+            const pts = [];
+            for (let k = 0; k < ptCount; k++) {
+                pts.push({ c: bytes[pos++], r: bytes[pos++] });
+            }
+            tracks.push({ type: tType, speed: tSpd, points: pts });
+        }
+    }
+    return { theme, speed, grid, tracks, nextOffset: pos };
+}
+
+function pushTextBytes(arr, str) {
+    const encoded = new TextEncoder().encode(str || "");
+    const len = Math.min(255, encoded.length);
+    arr.push(len);
+    for (let i = 0; i < len; i++) arr.push(encoded[i]);
+}
+
+function readTextBytes(bytes, offset) {
+    if (offset >= bytes.length) return null;
+    const len = bytes[offset];
+    if (offset + 1 + len > bytes.length) return null;
+    const slice = new Uint8Array(bytes.slice(offset + 1, offset + 1 + len));
+    return { text: new TextDecoder().decode(slice), nextOffset: offset + 1 + len };
+}
+
+function exportWorldCode() {
+    commitEditorLevel();
+    const world = customWorlds[activeWorldIdx];
+    if (!world) {
+        // Fallback if somehow outside a world
+        const bytes = encodeLevelBytes(editorGrid.map(r => r.join("")), editorTheme, editorHazardSpeed);
+        bytes.push(levelChecksum(bytes));
+        return LEVEL_CODE_PREFIX + bytesToB64(bytes);
+    }
+
+    const bytes = [];
+    pushTextBytes(bytes, world.name);
+    bytes.push(world.levels.length);
+
+    for (const lv of world.levels) {
+        pushTextBytes(bytes, lv.name || "");
+        const lvBytes = encodeLevelBytes(lv.grid, lv.theme, lv.speed, lv.tracks);
+        for (const b of lvBytes) bytes.push(b);
+    }
+
+    bytes.push(levelChecksum(bytes));
+    return WORLD_CODE_PREFIX + bytesToB64(bytes);
+}
+
+function importLevelCode(code) {
+    code = String(code || "").replace(/\s+/g, "");
+    const bad = (msg) => { showMessage("Invalid code boi", msg); return false; };
+
+    // 1. FULL WORLD CODE ("CDW1...")
+    if (code.indexOf(WORLD_CODE_PREFIX) === 0) {
+        const bytes = b64ToBytes(code.slice(WORLD_CODE_PREFIX.length));
+        if (!bytes || bytes.length < 8) return bad("boi that world code has invalid characters.");
+        const checksum = bytes.pop();
+        if (levelChecksum(bytes) !== checksum) return bad("boi that world code is incomplete or corrupted.");
+
+        const wNameRes = readTextBytes(bytes, 0);
+        if (!wNameRes || wNameRes.nextOffset >= bytes.length) return bad("boi thats an invalid world title.");
+        const worldName = cleanName(wNameRes.text, "Imported World");
+        let pos = wNameRes.nextOffset;
+
+        const levelCount = bytes[pos++];
+        if (levelCount < 1 || levelCount > MAX_CUSTOM_LEVELS) return bad("boi you have an invalid number of levels in the world.");
+
+        const newLevels = [];
+        for (let i = 0; i < levelCount; i++) {
+            const lNameRes = readTextBytes(bytes, pos);
+            if (!lNameRes) return bad("boi theres a corrupted level name at level " + (i + 1) + ".");
+            pos = lNameRes.nextOffset;
+
+            const lvData = decodeLevelBytes(bytes, pos);
+            if (!lvData) return bad("boi theres corrupted map data at level " + (i + 1) + ".");
+            pos = lvData.nextOffset;
+
+            newLevels.push({
+                name: cleanName(lNameRes.text, ""),
+                grid: lvData.grid,
+                theme: lvData.theme,
+                speed: lvData.speed,
+				tracks: lvData.tracks || []
+            });
+        }
+
+        if (pos !== bytes.length) return bad("boi theres extra data after the code.");
+
+        const world = customWorlds[activeWorldIdx];
+        if (world) {
+            world.name = worldName;
+            world.levels = newLevels;
+            loadEditorLevel(activeWorldIdx, 0);
+            saveCustomWorlds();
+        }
+        return true;
+    }
+
+    // 2. SINGLE LEVEL CODES ("CD1|..." or "CD2...") -> Replaces only the current level
+    let theme, speed, grid;
+    if (code.indexOf("CD1|") === 0) {
+        const parts = code.split("|");
+        if (parts.length !== 4 || parts[3].length !== 300) return bad("boi that isn't a valid code.");
+        theme = Math.max(1, Math.min(TOTAL_WORLDS, parseInt(parts[1]) || 1));
+        speed = Math.max(0, parseFloat(parts[2]) || 0);
+        grid = [];
+        for (let r = 0; r < 15; r++) grid.push(parts[3].slice(r * 20, (r + 1) * 20));
+    } else if (code.indexOf(LEVEL_CODE_PREFIX) === 0) {
+        const bytes = b64ToBytes(code.slice(LEVEL_CODE_PREFIX.length));
+        if (!bytes || bytes.length < 6) return bad("boi that code has invalid characters.");
+        const checksum = bytes.pop();
+        if (levelChecksum(bytes) !== checksum) return bad("boi that code is incomplete.");
+        const decoded = decodeLevelBytes(bytes, 0);
+        if (!decoded || decoded.nextOffset !== bytes.length) return bad("boi that data is the wrong size.");
+        theme = decoded.theme;
+        speed = decoded.speed;
+        grid = decoded.grid;
+        editorTracks = decoded.tracks || [];
+        activeTrackIdx = editorTracks.length > 0 ? 0 : -1;
+    } else {
+        return bad("boi that litterally isn't even a valid code.");
+    }
+
+    editorTheme = theme;
+    editorHazardSpeed = speed;
+    if (speed > 0) editorLastSpeed = speed;
+    editorGrid = grid.map(row => row.split(""));
+    return true;
+}
+
+function openLevelCodePrompt() {
+    let currentCode = exportWorldCode();
+    showDialog({
+        type: "code", title: "World code", value: currentCode, maxLen: 25000, note: "",
+        compact: true, pasteReplaces: true,
+        text: "Copy or paste your world code.",
+        onOk: (v) => {
+            if (v && v.trim() !== currentCode && importLevelCode(v)) {
+                renderEditor();
+                commitEditorLevel();
+            }
+        },
+        buttons: [
+            { label: "CLOSE", color: "#555", run: "cancel" },
+            { label: "COPY", color: "teal", run: (d) => {
+                let ok = false;
+                if (d.dom) {
+                    try { d.dom.focus(); d.dom.select(); ok = document.execCommand("copy"); } catch (err) {}
+                }
+                if (ok) { d.note = "Copied to clipboard"; return; }
+                copyToClipboard(d.dom ? d.dom.value : d.value).then((ok2) => {
+                    d.note = ok2 ? "Copied to clipboard" : "Press Ctrl+C to copy the code.";
+                });
+                if (d.dom) { d.dom.focus(); d.dom.select(); }
+            } },
+            { label: "LOAD", color: "forestgreen", run: "ok" }
+        ]
+    });
+}
+
+function openImportWorldPrompt() {
+    showDialog({
+        type: "code", title: "Import World or Level", value: "", maxLen: 25000, note: "",
+        compact: true, pasteReplaces: true,
+        text: "Paste a world code or level code (CDW1, CD2...) and press IMPORT.",
+        onOk: (v) => {
+            if (!v || !v.trim()) return;
+            // Create a temporary slot so importLevelCode can populate it cleanly
+            const tempIndex = customWorlds.length;
+            customWorlds.push({ name: "Imported World", levels: [blankLevelData(1)] });
+            activeWorldIdx = tempIndex;
+            activeLevelIdx = 0;
+
+            if (importLevelCode(v)) {
+                // If it was a single-level code (CD1/CD2), apply the decoded grid/theme/speed
+                if (!v.trim().startsWith(WORLD_CODE_PREFIX)) {
+                    commitEditorLevel();
+                }
+                saveCustomWorlds();
+                customPage = Math.floor(tempIndex / 5);
+                showCustomWorlds();
+            } else {
+                // Roll back the temporary world if the code was invalid
+                customWorlds.pop();
+                activeWorldIdx = -1;
+            }
+        },
+        buttons: [
+            { label: "CANCEL", color: "#555", run: "cancel" },
+            { label: "IMPORT", color: "forestgreen", run: "ok" }
+        ]
+    });
+}
+
+function currentCustomData() {
+    if (customRun.mode === "world") {
+        let w = customWorlds[customRun.worldIdx];
+        let lv = w && w.levels[customRun.levelIdx];
+        if (lv) return { name: lv.name, grid: lv.grid, theme: lv.theme, speed: lv.speed, tracks: lv.tracks || [], count: w.levels.length };
+    }
+    let w = customWorlds[activeWorldIdx];
+    let lv = w && w.levels[activeLevelIdx];
+    return { name: lv ? lv.name : "", grid: editorGrid.map(r => r.join("")), theme: editorTheme, speed: editorHazardSpeed, tracks: sanitizeTracks(editorTracks), count: 1 };
+}
+
+function playCustomLevel(opts) {
+    opts = opts || {};
+    const keepRunning = opts.keepTime && isRunning;
+    if (!keepRunning) {
+        stopStopwatch();
+    }
+    clearEditorUI();
+    clearMenuUI();
+    clearLevel();
+
+    let data = currentCustomData();
+    let theme = WORLD_THEMES[data.theme] || DEFAULT_THEME;
+    BACKGROUND_COLOR = theme.bg;
+    WALL_COLOR = theme.wall;
+    PLAYER_COLOR = theme.player;
+    OBSTACLE_COLOR = "crimson";
+    DOOR_COLOR = theme.door;
+    GUI_COLOR = theme.gui;
+    background.setColor(BACKGROUND_COLOR);
+
+    GAME_STATE = "CUSTOM_PLAY";
+    if (!opts.keepHp) hp = MAX_HP;
+    if (!opts.keepTime) {
+        movingLeft = movingRight = movingUp = movingDown = false;
+        startTime = 0;
+        elapsedTime = 0;
+        isRunning = false;
+    }
+    isDash = false;
+    canDash = true;
+    isInvulnerable = false;
+    timeFrozen = false;
+    speedBoost = false;
+    SPEED = 3.5;
+
+    hideGameplayUI();
+    initGUI();
+    initPlayer();
+
+    // Update the HUD immediately so it doesn't flash 00:00.00 between levels
+    if (opts.keepTime && timeText) {
+        update();
+    }
+
+    // Find spawn coordinates from the 'P' tile
+    spawnX = 40;
+    spawnY = (getHeight() / 2) - PLAYER_SIZE / 2;
+    for (let r = 0; r < 15; r++) {
+        for (let c = 0; c < 20; c++) {
+            if (data.grid[r][c] === "P") {
+                spawnX = c * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2;
+                spawnY = r * TILE_SIZE + (TILE_SIZE - PLAYER_SIZE) / 2;
+            }
+        }
+    }
+    // Load map without letting 'P' overwrite the spawn we just found
+    let mapStrings = data.grid.map(row => row.replace("P", "."));
+    loadMap(mapStrings);
+    if (data.speed > 0) {
+        addHazardWall(data.speed);
+    }
+	if (Array.isArray(data.tracks)) {
+        for (const tr of data.tracks) {
+            addTrackObstacle(tr.type, tr.points, tr.speed);
+        }
+    }
+    let label = "";
+    if (customRun.mode === "world") {
+        label = data.name ? data.name : ("L " + (customRun.levelIdx + 1) + "/" + data.count);
+    } else {
+        label = data.name ? data.name : "EDIT";
+    }
+    levelText.setText(label);
+    levelText.setPosition(getWidth() - 20 - levelText.getWidth(), 35);
+    resetPlayerPos();
+}
+
+function restartCustomRun() {
+    if (customRun.mode === "world") customRun.levelIdx = 0;
+    playCustomLevel();
+}
+
+function customLevelCleared() {
+    if (customRun.mode === "world") {
+        let w = customWorlds[customRun.worldIdx];
+        if (w && customRun.levelIdx + 1 < w.levels.length) {
+            customRun.levelIdx++;
+            playCustomLevel({ keepHp: true, keepTime: true });
+            return;
+        }
+        stopStopwatch();
+        let t = formatTime(elapsedTime);
+        let isNewBest = false;
+        if (w && elapsedTime > 0 && (!w.bestTime || elapsedTime < w.bestTime)) {
+            w.bestTime = elapsedTime;
+            saveCustomWorlds();
+            isNewBest = true;
+        }
+        let msg = "\"" + (w ? w.name : "") + "\"  |  Time: " + t + (isNewBest ? "  (NEW BEST!)" : "");
+        showMessage("World cleared!", msg, () => showCustomWorlds());
+        return;
+    }
+    stopStopwatch();
+    let t = formatTime(elapsedTime);
+    showMessage("Level cleared!", "Time: " + t, () => openLevelEditor());
+}
+
+function exitCustomPlay() {
+    resumeGame();
+    if (customRun.mode === "world") showCustomWorlds();
+    else openLevelEditor();
+}
+
+function loadMap(map) {
+	spawnX = 40; 
+	spawnY = (getHeight() / 2) - PLAYER_SIZE / 2;
+    for (let row = 0; row < map.length; row++) {
+        for (let column = 0; column < map[row].length; column++) {
+            let tile = map[row][column];
+            let x = column * TILE_SIZE;
+            let y = row * TILE_SIZE;
+            if (tile == "#") {
+                addWall(x, y, TILE_SIZE, TILE_SIZE);
+            } else if (tile == "X") {
+                addObstacleRect(x, y, TILE_SIZE, TILE_SIZE);
+            } else if (tile == "C") {
+                addObstacleCirc(x + TILE_SIZE / 2, y + TILE_SIZE / 2, TILE_SIZE / 2);
+            } else if (tile == "D") {
+                addDoor(x, y, TILE_SIZE, TILE_SIZE);
+            } else if (tile == "H") {
+                addItem(x, y, "health");
+            } else if (tile == "T") {
+                addItem(x, y, "time");
+            } else if (tile == "S") {
+                addItem(x, y, "speed");
+            } else if (tile == "L") {
+                addLockedDoor(x, y, TILE_SIZE, TILE_SIZE);
+            } else if (tile == "K") {
+                addKey(x, y, false);
+            } else if (tile == "F") {
+                addKey(x, y, true);
+            } else if (tile == "P") {
+				spawnX = x + (TILE_SIZE - PLAYER_SIZE) / 2;
+				spawnY = y + (TILE_SIZE - PLAYER_SIZE) / 2;
+				curPlayerX = spawnX;
+				curPlayerY = spawnY;
+				if (player) player.setPosition(curPlayerX, curPlayerY);
+			}
+        }
+    }
+}
+
+function W1L1() {
+    let map = [
+        "####################",
+        "#..................#",
+        "#..................#",
+        "#..................#",
+        "#..................#",
+        "#..................#",
+        "#........##........#",
+        "#........##........D",
+        "#........##........#",
+        "#..................#",
+        "#..................#",
+        "#..................#",
+        "#..................#",
+        "#..................#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("1-1");
+}
+
+function W1L2() {
+    let map = [
+        "####################",
+        "#....##............#",
+        "#....##............#",
+        "#....##............#",
+        "#....##............#",
+        "#....##............#",
+        "#....##......##....#",
+        "#....##......##....D",
+        "#....##......##....#",
+        "#............##....#",
+        "#............##....#",
+        "#............##....#",
+        "#............##....#",
+        "#............##....#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("1-2");
+}
+
+function W1L3() {
+    let map = [
+        "####################",
+        "#....#.............#",
+        "#....#.............#",
+        "#....#.............#",
+        "#....#.........T...#",
+        "#....#.............#",
+        "#....#..#..#########",
+        "#....#..#....#.....D",
+        "#....#..#....#.....#",
+        "#.......#....#.....#",
+        "#.......#..........#",
+        "#.......#..........#",
+        "#.......#..........#",
+        "#.......#..........#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("1-3");
+}
+
+function W1L4() {
+    let map = [
+        "####################",
+        "#..................#",
+        "#..#############...#",
+        "#..#.....#.....#...#",
+        "#.....#.....#..#...#",
+        "#############..#...#",
+        "#.....#........#...#",
+        "#..#..#....#...#...D",
+        "#..#..#....#...#...#",
+        "#..#.......#...#...#",
+        "#..#.......#...#...#",
+        "#..#.......#...#...#",
+        "#..#.......#...#...#",
+        "#..#.......#.S.#...#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("1-4");
+}
+
+function W1L5() {
+    let map = [
+        "####################",
+        "#..#.....#..#..#...#",
+        "#..#..#..#..#..#...#",
+        "#..#..#..#..#..#...#",
+        "#..#..#..#..#..#...#",
+        "#..#..#..#..#..#...#",
+        "#..#..#..#..#..#...#",
+        "#.....#.....#......D",
+        "#..#..#..#..#..#...#",
+        "#..#..#..#..#..#...#",
+        "#..#..#..#..#..#...#",
+        "#..#..#..#..#..#...#",
+        "#..#..#..#..#..#...#",
+        "#..#..#..#.....#...#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("1-5");
+}
+
+function W1L6() {
+    let map = [
+        "####################",
+        "#.......#.#######..#",
+        "#.......#.#.....#..#",
+        "#..T..#.#.#..#..#..#",
+        "#.....#.#....#..#..#",
+        "#######.####.#..#..#",
+        "#.....#......#..#..#",
+        "#.....#......#..#..D",
+        "#.....#.#..###..#..#",
+        "#.......#....#..#..#",
+        "#########....#..#..#",
+        "#.......#..#.#.....#",
+        "#.......#..#.#.....#",
+        "#..........#.#.....#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("1-6");
+}
+
+function W1L7() {
+    let map = [
+        "####################",
+        "#..................#",
+        "#...#.....#........#",
+        "#...#.....#........#",
+        "###.################",
+        "#.........#........#",
+        "#.........#........#",
+        "#.........#........D",
+        "#.........#........#",
+        "######.##########.##",
+        "#.........#...#....#",
+        "#######...#...#....#",
+        "#.............#....#",
+        "#.........#........#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("1-7");
+}
+
+function W1L8() {
+    let map = [
+        "####################",
+        "#..................#",
+        "#..................#",
+        "#...#########......#",
+        "#.....#.....#......#",
+        "#.....#..#..#......#",
+        "#.....#..#.........#",
+        "#.....#..#.........D",
+        "#.....#..#.........#",
+        "#..##############..#",
+        "#..#............#..#",
+        "#...............#..#",
+        "#.....#######...#..#",
+        "#.....#T........#..#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("1-8");
+}
+
+function W1L9() {
+    let map = [
+        "####################",
+        "#...........#...#..#",
+        "#.#########.#...#..#",
+        "#.........#.#.#.#..#",
+        "#...#####.#.#.#.#..#",
+        "#......##.#.#.#.#..#",
+        "########..#.#.#.#..#",
+        "#.........#.#.#.#..D",
+        "########..#.#.#.#..#",
+        "#......####.#.#.#..#",
+        "#...........#.#....#",
+        "#..##########.#....#",
+        "#.............#....#",
+        "#.............#....#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("1-F");
+}
+
+function W2L1() {
+    let map = [
+        "####################",
+        "#........X.........#",
+        "#........X.........#",
+        "#........X.........#",
+        "#........X.........#",
+        "#........X.........#",
+        "#........X.........#",
+        "#........X.........D",
+        "#........X.........#",
+        "#........X.........#",
+        "#........X.........#",
+        "#........X.........#",
+        "#........X.........#",
+        "#........X.........#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("2-1");
+}
+
+function W2L2() {
+    let map = [
+        "####################",
+        "#...#....X....#....#",
+        "#...#....X....#....#",
+        "#...#....X....#....#",
+        "#...#....X....#....#",
+        "#...#....X....#....#",
+        "#...#....X....#....#",
+        "#...#....X....#....D",
+        "#...X....#....X....#",
+        "#...X....#....X....#",
+        "#...X....#....X....#",
+        "#...X....#....X....#",
+        "#...X....#....X....#",
+        "#...X....#....X....#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("2-2");
+}
+
+function W2L3() {
+    let map = [
+        "####################",
+        "#....X.............#",
+        "#....X.............#",
+        "#....#.............#",
+        "############.......#",
+        "#...#......X.......#",
+        "#...#...############",
+        "#...#..............D",
+        "#...#..............#",
+        "#.##########XX######",
+        "#..................#",
+        "#...........########",
+        "#########..........#",
+        "#S....X............#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("2-3");
+}
+
+function W2L4() {
+    let map = [
+        "####################",
+        "#............X.....#",
+        "#............X.....#",
+        "#............X.....#",
+        "#...X..XXXX..X.....#",
+        "#.H.X..X..X..X.....#",
+        "###XX..X..X..X.....#",
+        "#......X..X..X.....D",
+        "#......X..X..X..XXX#",
+        "#XXXXXXX..X..X.....#",
+        "#.........X..X.....#",
+        "#...XXXXXXX..XXXX..#",
+        "#...X..............#",
+        "#...X..............#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("2-4");
+}
+
+function W2L5() {
+    let map = [
+        "####################",
+        "#...X.........#....#",
+        "#...X.........#....#",
+        "#######XXX#####....#",
+        "#...#.....#...#....#",
+        "#...#.....#........#",
+        "#...#.....#........#",
+        "#...#.....#........D",
+        "#...#.....###XX#####",
+        "#...#..........#.T.#",
+        "#...######.....#...#",
+        "#..............#...#",
+        "#.###.....######...#",
+        "#..............X...#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("2-5");
+}
+
+function W2L6() {
+    let map = [
+        "####################",
+        "#.....#............#",
+        "#.....#............#",
+        "####..##########...#",
+        "#..#..#........#...#",
+        "#..#...........#...#",
+        "#..#....#####..#...#",
+        "#..###..#......#...D",
+        "#.......#......#...#",
+        "#.......#.###..#...#",
+        "#...#####...#..#...#",
+        "#...#.....#.####...#",
+        "#...#######....X...#",
+        "#..............X...#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("2-6");
+}
+
+function W2L7() {
+    let map = [
+        "####################",
+        "#.#S...X.#.........#",
+        "#.####.X.#######...#",
+        "#.#....X.......#...#",
+        "#.########.....#...#",
+        "#........X.....#...#",
+        "#........X.....#...#",
+        "#........X.....#...D",
+        "#..###########.#...#",
+        "#..#.#...#...#.#XXX#",
+        "#..#.#.#.#.#.#X#...#",
+        "#..#...#...#...#...#",
+        "#..#XXX#...#####...#",
+        "#......#...........#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("2-7");
+}
+
+function W2L8() {
+    let map = [
+        "####################",
+        "#........#...#..#..#",
+        "#........#...#..#..#",
+        "#..#XX#..#...#..#..#",
+        "#..#..#XX#.####.#..#",
+        "#..#..#....#..#.#..#",
+        "#..#..######..#.#..#",
+        "#..#....X..#..#....D",
+        "#..#....X..#..#....#",
+        "#..###..X.....#....#",
+        "#..X.#..X..##.###XX#",
+        "#..XT#..X...#......#",
+        "#..##########......#",
+        "#...........X......#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("2-8");
+}
+
+function W2L9() {
+    let map = [
+        "XXXXXXXXXXXXXXXXXXXX",
+        "#..#..X....X....#..X",
+        "#..#..X....X....#..X",
+        "#..#..X.#####...#..X",
+        "#..#..X.###.....#..X",
+        "#..######.#.#####..X",
+        "#...#.....#.#.X.X..X",
+        "#...#.......#.X.X..D",
+        "#...#.......#...###X",
+        "#...#....#####...#.X",
+        "#X###......#.....#.X",
+        "#.#X.......####XX#.X",
+        "#..XXXX....#.....#.X",
+        "#.....X..........#.X",
+        "XXXXXXXXXXXXXXXXXXXX",
+        ]
+    loadMap(map);
+    levelText.setText("2-F");
+}
+
+function W3L1() {
+    let map = [
+        "####################",
+        "#.........#........#",
+        "#.TSH.....#........#",
+        "#.....##########...#",
+        "#.....XXXXX...X#...#",
+        "######........X#...#",
+        "#....#........X#...#",
+        "#....#........X#...D",
+        "#....#........X#...#",
+        "#....#..X#....XXXXX#",
+        "#.......X#.........#",
+        "#.......X#.........#",
+        "#.......X#.........#",
+        "#.......X#.........#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("3-1");
+}
+
+function W3L2() {
+    let map = [
+        "####################",
+        "#...............#X.#",
+        "#######.#X.####.#X.#",
+        "#XXXXX#H#X....####.#",
+        "#.....######..#....#",
+        "#......#......#....#",
+        "#......#......#X#..#",
+        "#.#X...#..#####.#..D",
+        "#.#X...#....#...####",
+        "#.#X.#.#....#...#..#",
+        "####.#.####.#...#..#",
+        "#....#.#........#..#",
+        "#....#.X........#..#",
+        "#....#.X........#..#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("3-2");
+}
+
+function W3L3() {
+    let map = [
+        "####################",
+        "#......X...X#......#",
+        "#......X...X#......#",
+        "#......X...X#......#",
+        "#......X...X#......#",
+        "#XXXX####..X#XXXXXX#",
+        "#....#..X..X########",
+        "#....#..#####......D",
+        "#....#...X..X......#",
+        "#....#...X..########",
+        "######...X.........#",
+        "#XXXX#####.........#",
+        "#...S..X...........#",
+        "#......X...........#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("3-3");
+}
+
+function W3L4() {
+    let map = [
+        "####################",
+        "#XXXX...XXX........#",
+        "#XXXX...XXX........#",
+        "#XXXX...XXX........#",
+        "#XXXX...XXX........#",
+        "#XXXX...XXXXXXXXXXX#",
+        "#...X...XXX..XXX...#",
+        "#...X...XXX..XXX...D",
+        "#...X...XXX..XXX...#",
+        "#XXXX...XXX..XXX...#",
+        "#XXXX........XXX...#",
+        "#XXXX........XXX...#",
+        "#XXXX........XXX...#",
+        "#XXXX........XXX...#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("3-4");
+}
+
+function W3L5() {
+    let map = [
+        "####################",
+        "#...X...X#.....X...#",
+        "#...X...X#.....#...#",
+        "#...X...####...#X###",
+        "#...#...#..##X##...#",
+        "#...#...X..#XXX#...#",
+        "#...#...X..#...#...#",
+        "#...#####XX#...#...D",
+        "#...X#..#..X...#####",
+        "#...X#..#..#...X...#",
+        "#...X#..#..#...X#..#",
+        "############...X#..#",
+        "#..........#...X#..#",
+        "#T.............X#..#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("3-5");
+}
+
+function W3L6() {
+    let map = [
+        "####################",
+        "#........X#..#..#..#",
+        "#....####X#..####..#",
+        "#....X...X#..#XX#..#",
+        "######...X#..#H....#",
+        "#........X#..####XX#",
+        "#........X#..#.....#",
+        "#........X#..#.....D",
+        "#.....#XX########..#",
+        "#XXXXX#...X..#XX#..#",
+        "#########.#.....#..#",
+        "#.........#.....#..#",
+        "#......##########..#",
+        "#......X........X..#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("3-6");
+}
+
+function W3L7() {
+    let map = [
+        "####################",
+        "#..#...X#...X......#",
+        "#..#...X#...X......#",
+        "#..#...X#...#......#",
+        "#..#...X#.S.#......#",
+        "#..X##X######..X####",
+        "#..X#..#.......X#..#",
+        "#..X#..#.......X#..D",
+        "#..X#..#.......X#..#",
+        "#..X####....XXXX##X#",
+        "#...X..X.#X#####...#",
+        "#####..X.#..X..#...#",
+        "#...#..X.#..X..#...#",
+        "#...#..X.#..X..X...#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("3-7");
+}
+
+function W3L8() {
+    let map = [
+        "####################",
+        "#...#....X.....X...#",
+        "#...#....X#..###...#",
+        "#...#.#X#X#..#.#...#",
+        "#...#.#..X####.###.#",
+        "#...###..X#......#.#",
+        "#....#...X#......#.#",
+        "#....##..X.......#.D",
+        "#.....#..X#..###.#.#",
+        "#.....#..X#..#...#.#",
+        "#.....#..X####.###.#",
+        "#.###.#..X#..#..#..#",
+        "#.#.###..X#..####..#",
+        "#.X......X......#..#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("3-8");
+}
+
+function W3L9() {
+    let map = [
+        "XXXXXXXXX###XXXXXXXX",
+        "#..X#...X...X.H#...X",
+        "#..X#...##XX######.X",
+        "#..X###..#..#X...#.X",
+        "#.....#..#..#X...#.X",
+        "#######..#..#X.#X#.X",
+        "#XXXXXXXX#..#X.#.#.X",
+        "#...........#X.#.#.D",
+        "#..#######XX#X.#.#.X",
+        "#.#XXXXXXX.....#.#XX",
+        "#.#X...........X...X",
+        "###XXXXXXXXXXXX#...X",
+        "#XXX############X##X",
+        "#...T...X..........X",
+        "XXXXXXXXXXXXXXXX#XXX",
+        ]
+    loadMap(map);
+    levelText.setText("3-F");
+}
+
+function W4L1() {
+    let map = [
+        "####################",
+        "#...X.....X........#",
+        "#...X.....X..XXXXXX#",
+        "#...X.....#XX#######",
+        "#...X###.....#.....#",
+        "#...X..#.....#.....#",
+        "#...X..#.....#.....#",
+        "#...X..####..#XX#.LD",
+        "####X.....#.....#..#",
+        "#...X.....#.....#..#",
+        "#...X.....####XXXXX#",
+        "########.....#######",
+        "#......#....K#.....#",
+        "#......#.....#.....#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("4-1");
+}
+
+function W4L2() {
+    let map = [
+        "####################",
+        "#..X#T.#.....#..X#.#",
+        "#..X#..#.....#..X#.#",
+        "#..X#..#X###X#..X#.#",
+        "#..X#..#.#.X.#..X#.#",
+        "#..X#..#.#X###..X#.#",
+        "#..X#..#.#.#.#..X#.#",
+        "#..X#..#.#K#.X..X.LD",
+        "#..X#..#.#.#.#..X#.#",
+        "#..X#..#XX#XX#..X#.#",
+        "#..X#..#.....#..X#.#",
+        "#..X#..###X###..X#.#",
+        "#..X...X.....#..X#.#",
+        "#..X...X.....#..X#.#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("4-2");
+}
+
+function W4L3() {
+    let map = [
+        "####################",
+        "#..#.#X....K.X#.X..#",
+        "#..X.#X......X#.X..#",
+        "#..X.#X.........X..#",
+        "#..#.###########X..#",
+        "#XXXXXXXXXXXXX###X##",
+        "#..#.X........X.#..#",
+        "#..#.X........X.#.LD",
+        "#..#.X........X.#..#",
+        "#####XXXXXXXXXXXXXX#",
+        "#.#.##########..X..#",
+        "#.#.#X.......#..X..#",
+        "#.#.#X.......#.#X..#",
+        "#.#.#X.H.....X.#X..#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("4-3");
+}
+
+function W4L4() {
+    let map = [
+        "####################",
+        "#...#K.........#X..#",
+        "#...#..........#X..#",
+        "#...#########XX#...#",
+        "#...#XXX.......#...#",
+        "#...#..........#...#",
+        "#...X...####...X...#",
+        "#...X...X..#...X..LD",
+        "#...X...#H.X...X...#",
+        "#...#.#.####...#...#",
+        "#...#.#........#...#",
+        "#...#.#......XX#...#",
+        "#...#.X#X#######...#",
+        "#...#.X#......F#...#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("4-4");
+}
+
+function W4L5() {
+    let map = [
+        "####################",
+        "#...X..X..X#.X.S#..#",
+        "#...X..X..X#.X..#.F#",
+        "#...X#.X..X#.X..#..#",
+        "#...X#.X..X#.X..#..#",
+        "#...X#.X..X#.X..#..#",
+        "#...X#.X..X#.X..#..#",
+        "#...X#.X..X#.X..#.LD",
+        "#...X#.X..X#.X..#..#",
+        "#...X#.X..X#.X..#X##",
+        "#...X#.X..#..X..#..#",
+        "#...#..X..#..X..#..#",
+        "#.K.#..X..X..X..#..#",
+        "#...#..X..X..X..X..#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("4-5");
+}
+
+function W4L6() {
+    let map = [
+        "####################",
+        "#......#..#........#",
+        "#......####....#.K.#",
+        "######...X.....#...#",
+        "#XXXXX...X#.XXXXXX.#",
+        "#....X...X#.######.#",
+        "#....X...X#X#.T.X#.#",
+        "#....X#..X#.##..X#LD",
+        "#....X#..X#..#XX##.#",
+        "#XXXXX###X#..X.###.#",
+        "#######F###..#.###.#",
+        "#F...#...X#..#.#...#",
+        "#....#...X#..#.#...#",
+        "#....X...X...#.#...#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("4-6");
+}
+
+function W4L7() {
+    let map = [
+        "####################",
+        "#..#X..............#",
+        "#..#X..########....#",
+        "#..#X..XXXXXXX#..K.#",
+        "####X........X#....#",
+        "#XXXX..XXXXXXX######",
+        "#......X###..XXXXXX#",
+        "#......X#.....X...LD",
+        "#......X#.....X....#",
+        "#......X#.....X....#",
+        "#..XXXXX#...XXXXX..#",
+        "#..X##FX#...X####..#",
+        "#..X#.......X#.....#",
+        "#..X#.......X#..F..#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("4-7");
+}
+
+function W4L8() {
+    let map = [
+        "####################",
+        "#F.X....X.....X#..F#",
+        "######XXX.....X#...#",
+        "#XXX....X#....X#...#",
+        "#.......X#....X#X###",
+        "#.......X#....X#...#",
+        "#.......X#....X#...#",
+        "#.......X.....X#..LD",
+        "#XXX#####XXX##X#...#",
+        "#...#..#X.....X#X###",
+        "#...#..#X.....X#...#",
+        "#...#..#X.....X#...#",
+        "#...#..#X......X..F#",
+        "#...X.K#X......X..H#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("4-8");
+}
+
+function W4L9() {
+    let map = [
+        "XXXXXXXXXXXXXXXXXXXX",
+        "#.F.X....F#...K#X..X",
+        "#.T.#.....#....#X..X",
+        "#####.....X....#X..X",
+        "#XXXX######....#X..X",
+        "#..F#...#...X######X",
+        "#...#...#...X#F....X",
+        "#...#...#...X#....LD",
+        "#...#...#...X#.....X",
+        "#...#...#...X#.....X",
+        "#...#..F#...X#.....X",
+        "#XXX#.XXXXXXX####..X",
+        "###.#.X..##..#..#..X",
+        "#F..X..#.....X.....X",
+        "XXXXXXXXXXXXXXXXXXXX",
+        ]
+    loadMap(map);
+    levelText.setText("4-F");
+}
+
+function W5L1() {
+    let map = [
+        "####################",
+        "#....##......##....#",
+        "#....##......##....#",
+        "#....##......##....#",
+        "#....##..XX..##....#",
+        "#....X...XX...X....#",
+        "#....XX......XX....#",
+        "#....XX......XX....D",
+        "#....XX......XX....#",
+        "#....X...XX...X....#",
+        "#....##..XX..##....#",
+        "#....##......##....#",
+        "#....##......##....#",
+        "#....##......##....#",
+        "####################",
+    ];
+    loadMap(map);
+    addHazardWall(0.45);
+    levelText.setText("5-1");
+}
+
+function W5L2() {
+    let map = [
+        "####################",
+        "#....X..#..........#",
+        "#....X..#....K.....#",
+        "#....X..#..........#",
+        "#....X..#####..#####",
+        "#....X....X........#",
+        "#...XX....X........#",
+        "#...XX....X.......LD",
+        "#...XX....X........#",
+        "#...X.....X........#",
+        "#...X...#####L######",
+        "#...X...#..........#",
+        "#...X...#....S.....#",
+        "#...X...#..........#",
+        "####################",
+    ];
+    loadMap(map);
+    addHazardWall(0.50);
+    levelText.setText("5-2");
+}
+
+function W5L3() {
+    let map = [
+        "####################",
+        "#T...#........#....#",
+        "#....#...XX...#F...#",
+        "#XXXX#...XX...#XXXX#",
+        "#....#...##...#....#",
+        "#....#...##...#....#",
+        "#....X...##...X....#",
+        "#....#XXX##XXX#...LD",
+        "#....X...##...X....#",
+        "#....#...##...#....#",
+        "#....#...##...#....#",
+        "#XXXX#...XX...#XXXX#",
+        "#....#...XX...#....#",
+        "#....#........#K...#",
+        "####################",
+    ];
+    loadMap(map);
+    addHazardWall(0.70);
+    levelText.setText("5-3");
+}
+
+function W5L4() {
+    let map = [
+        "####################",
+        "#.......X..#......S#",
+        "#..######..#XXXX####",
+        "#..#....#..#.......#",
+        "#..#....#..#####XXX#",
+        "#..X....#..........#",
+        "#..X....#.....X#...#",
+        "#..###XX#.....X#..LD",
+        "#..#....#.....X#...#",
+        "#..#....#####.X#...#",
+        "#..#.......X#......#",
+        "#..#######.X#..K...#",
+        "#..XXXXXXX.X#......#",
+        "#..........X#......#",
+        "####################",
+    ];
+    loadMap(map);
+    addHazardWall(0.55);
+    levelText.setText("5-4");
+}
+
+function W5L5() {
+    let map = [
+        "####################",
+        "#.................T#",
+        "#XXXXXXXXXXXXXXXXXX#",
+        "#....X.......X..X..#",
+        "#...XXXX..XXXX..X..#",
+        "#...####..####..X..#",
+        "#......#..#.....X..#",
+        "#......#..#.....X..D",
+        "#...####..####..X..#",
+        "#...XXXX..XXXX..X..#",
+        "#....X.......X..X..#",
+        "#XXXXXXXXXXXXXXXXXX#",
+        "#.................H#",
+        "#..................#",
+        "####################",
+    ];
+    loadMap(map);
+    addHazardWall(1.00);
+    levelText.setText("5-5");
+}
+
+function W5L6() {
+    let map = [
+        "####################",
+        "#..K..#......#..#..#",
+        "#.....#..T...#..#..#",
+        "####XX#......#..#..#",
+        "#..#..####L###..#..#",
+        "#..#............#..#",
+        "#..#....XXXX....#..#",
+        "#..X....XXXX....X.LD",
+        "#..#....XXXX....#..#",
+        "#..#............#..#",
+        "#..#..####L###..#..#",
+        "####XX#......#..#..#",
+        "#.....#..F...#..#..#",
+        "#.....#......#..#..#",
+        "####################",
+    ];
+    loadMap(map);
+    addHazardWall(0.70);
+    levelText.setText("5-6");
+}
+
+function W5L7() {
+    let map = [
+        "####################",
+        "#..X..X..#..X..#.H.#",
+        "#..#..X..#..X..#...#",
+        "#..#..X..#..X..#...#",
+        "#..#..X..X..X......#",
+        "#X##..X..#..X..#####",
+        "#..#..X..#..X..XXXX#",
+        "#..#..X..#..X......D",
+        "#..#..X..#..X..XXXX#",
+        "#X##..X..#..X..#####",
+        "#..#..X..X..X......#",
+        "#..#..X..#..X..#...#",
+        "#..#..X..#..X..#...#",
+        "#..X..X..#..X..#...#",
+        "####################",
+    ];
+    loadMap(map);
+    addHazardWall(0.80);
+    levelText.setText("5-7");
+}
+
+function W5L8() {
+    let map = [
+        "####################",
+        "#......#X..#####...#",
+        "#..H...#X..XXXXX...#",
+        "#......#X..........#",
+        "#XX#####X..##X##...#",
+        "#......X...#...#...#",
+        "#....XX#X..#...#...#",
+        "#...XXX#X..#.F.#..LD",
+        "#....XX#X..#...#...#",
+        "#......X...#...#...#",
+        "#XX#####X..#####...#",
+        "#......#X....F.....#",
+        "#..K...#X..XXXXX...#",
+        "#......#X..#####...#",
+        "####################",
+    ];
+    loadMap(map);
+    addHazardWall(0.65);
+    levelText.setText("5-8");
+}
+
+function W5L9() {
+    let map = [
+        "XXXXXXXXXXXXXXXXXXXX",
+        "X...X#F......F#X...X",
+        "X...X#...K....#X...X",
+        "XXXXX#F......F#XXXXX",
+        "X....####XX####....X",
+        "X....#S.......#....X",
+        "X....X........X....X",
+        "X..##############.LD",
+        "X....X........X....X",
+        "X....#........#....X",
+        "X....####XX####....X",
+        "XXXXX#........#XXXXX",
+        "X...X#...F....#X...X",
+        "X...X#........#X...X",
+        "XXXXXXXXXXXXXXXXXXXX",
+    ];
+    loadMap(map);
+    addHazardWall(0.90);
+    levelText.setText("5-F");
+}
+
+function W6L1() {
+    let map = [
+        "####################",
+        "#........C.........#",
+        "#.........C........#",
+        "#........C.........#",
+        "#.........C........#",
+        "#........C.........#",
+        "#.........C........#",
+        "#........C.........D",
+        "#.........C........#",
+        "#........C.........#",
+        "#.........C........#",
+        "#........C.........#",
+        "#.........C........#",
+        "#........C.........#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("6-1");
+}
+
+function W6L2() {
+    let map = [
+        "####################",
+        "#....#....#..X..C..#",
+        "#....#....#..X.....#",
+        "#....####.#..####..#",
+        "#.C.......#.....#..#",
+        "#.........#..C..#..#",
+        "#....####X#.....#..#",
+        "#.....X#..#..C..#..D",
+        "#..C..X#..#.....##.#",
+        "#.....X#.........#.#",
+        "#.....X#..C.######.#",
+        "#.....X#....#....###",
+        "#.....X#..###..C...#",
+        "#.....X#..X.......H#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("6-2");
+}
+
+function W6L3() {
+    let map = [
+        "####################",
+        "#K..............X#.#",
+        "#####..####..C..X#.#",
+        "#XXXX#.#.X#.....X#C#",
+        "#....##...#XX#X.X#.#",
+        "#.....##.....#X.X#.#",
+        "#....X.#..C..#X.X#.#",
+        "#....#....#.##..X.LD",
+        "#....########...X..#",
+        "#........#.....#####",
+        "#.C.....##..C......#",
+        "#......##XXXXXXX...#",
+        "#....C.#.######X.C.#",
+        "#.C....#......#X..H#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("6-3");
+}
+
+function W6L4() {
+    let map = [
+        "####################",
+        "#..........X#...#..#",
+        "#...##..C..X#...#..#",
+        "#.K..###...X#.C.#C.#",
+        "#....#.#...X#...#..#",
+        "####.#..........#.C#",
+        "#..###...C...#X.#..#",
+        "#............#X##.LD",
+        "#........#####X.#..#",
+        "#XXXX....#...X..#..#",
+        "#####....#...#..#XX#",
+        "#........#...#.....#",
+        "#...X#####.C.#..C..#",
+        "#...X........#.....#",
+        "####################",
+        ]
+    loadMap(map);
+    levelText.setText("6-4");
+}
+
+function W6L5() {
+    let map = [
+        "####################",
+        "#...........X......#",
+        "#######..C..#...C..#",
+        "#XXX#.......#......#",
+        "#..X#.....#####....#",
+        "#......C......#..###",
+        "#.#.C.........#.##.#",
+        "#.#...X#...C..#.#..D",
+        "#.#XXXX#.....####..#",
+        "##########...#..#..#",
+        "#....X.....######..#",
+        "#..###..C..X.......#",
+        "#..#.#########..C..#",
+        "#...C..T#..........#",
+        "####################",
+        ]
+    loadMap(map);
+    addHazardWall(0.65);
+    levelText.setText("6-5");
+}
+
+function W6L6() {
+    let map = [
+        "####################",
+        "#....C...XX...C....#",
+        "#..C...C.XX.C...C..#",
+        "#....C...##...C....#",
+        "#..C.....##.....C..#",
+        "#........##........#",
+        "#....C...##...C....#",
+        "#....C...XX...C....D",
+        "#....C...##...C....#",
+        "#........##........#",
+        "#..C.....##.....C..#",
+        "#....C...##...C....#",
+        "#..C...C.XX.C...C..#",
+        "#....C...XX...C....#",
+        "####################",
+    ];
+    loadMap(map);
+    levelText.setText("6-6");
+}
+
+function W6L7() {
+    let map = [
+        "####################",
+        "#......#CCCC#......#",
+        "#..C...C.K..C...C..#",
+        "#......#CCCC#......#",
+        "####X###########X###",
+        "#.....X..C..X......#",
+        "#...C.X.....X.C...C#",
+        "#.....X..C..X.....LD",
+        "#...C.X.....X.C...C#",
+        "#.....X..C..X......#",
+        "####X###########X###",
+        "#......#CCCC#......#",
+        "#..C...C.S..C...C..#",
+        "#......#CCCC#......#",
+        "####################",
+    ];
+    loadMap(map);
+    levelText.setText("6-7");
+}
+
+function W6L8() {
+    let map = [
+        "####################",
+        "#....C.......#.....#",
+        "#..C...C.....C..K..#",
+        "#....C.......#.....#",
+        "#XX#####C#####XX####",
+        "#.....#....X#...#..#",
+        "#...C.#..C.X#.C.#..#",
+        "#.....#....X#...#.LD",
+        "#...C.#..C.X#.C.#..#",
+        "#.....#....X....#..#",
+        "#XX#####C#####..##X#",
+        "#....C.......#.....#",
+        "#..C.H.C.....C.....#",
+        "#....C.......#.....#",
+        "####################",
+    ];
+    loadMap(map);
+    addHazardWall(0.50);
+    levelText.setText("6-8");
+}
+
+function W6L9() {
+    let map = [
+        "XXXXXXXXXXXXXXXXXXXX",
+        "X...C.C.#T.X.C.C...X",
+        "X..C.C..#F.#..C.C..X",
+        "X...C.C.####.C.C...X",
+        "X......C.CC....#####",
+        "######...CC...##...#",
+        "#...##..C..C..##CCC#",
+        "#....X..C..C......LD",
+        "#...##..C..C..##CCC#",
+        "######...CC...##...#",
+        "X......C.CC....#####",
+        "X...C.C.####.C.C...X",
+        "X..C.C..#..#..C.C..X",
+        "X...C.C.#K.X.#.C...X",
+        "XXXXXXXXXXXXXXXXXXXX",
+    ];
+    loadMap(map);
+    addHazardWall(0.55);
+    levelText.setText("6-F");
+}
+
+// 7-1
+function W7L1() {
+    let map = [
+        "####################",
+        "#..................#",
+        "#....#........#....#",
+        "#....#........#....#",
+        "#....#........#....#",
+        "#....#........#....#",
+        "#..................#",
+        "#..................D",
+        "#..................#",
+        "#....#........#....#",
+        "#....#........#....#",
+        "#....#........#....#",
+        "#....#........#....#",
+        "#..................#",
+        "####################",
+    ];
+    loadMap(map);
+    addTrackObstacle("X", [{ c: 3, r: 2 }, { c: 3, r: 12 }], 2.2);
+    addTrackObstacle("C", [{ c: 7, r: 12 }, { c: 7, r: 2 }], 2.6);
+    addTrackObstacle("X", [{ c: 11, r: 2 }, { c: 11, r: 12 }], 3.0);
+    addTrackObstacle("C", [{ c: 16, r: 12 }, { c: 16, r: 2 }], 2.4);
+    levelText.setText("7-1");
+}
+
+// 7-2
+function W7L2() {
+    let map = [
+        "####################",
+        "#........X......X..#",
+        "#........X......X..#",
+        "#...##############.#",
+        "#.............C.##.#",
+        "#.............C..#.#",
+        "#..######.....C.T#.#",
+        "#.............C..#.D",
+        "#..######.....C..#.#",
+        "#.............C..#.#",
+        "#...##############.#",
+        "#........X......X..#",
+        "#......S.X......X..#",
+        "#........X......X..#",
+        "####################",
+    ];
+    loadMap(map);
+    addTrackObstacle("C", [{ c: 3, r: 2 }, { c: 16, r: 2 }], 3.2);
+    addTrackObstacle("X", [{ c: 16, r: 4 }, { c: 4, r: 4 }], 2.8);
+    addTrackObstacle("C", [{ c: 16, r: 12 }, { c: 3, r: 12 }], 3.2);
+    levelText.setText("7-2");
+}
+
+// 7-3
+function W7L3() {
+    let map = [
+        "####################",
+        "#..K...#.....#...F.#",
+        "#......#.....#.....#",
+        "#......#..X..#.....#",
+        "####X###..X..###X###",
+        "#......X.....X.....#",
+        "#......X.....X.....#",
+        "#......X.....X....LD",
+        "#......X.....X.....#",
+        "####X###..C..###X###",
+        "#......#..C..#.....#",
+        "#......#.....#.....#",
+        "#..H...#.....#.....#",
+        "#......X.....X.....#",
+        "####################",
+    ];
+    loadMap(map);
+    addTrackObstacle("X", [{ c: 2, r: 3 }, { c: 5, r: 3 }, { c: 5, r: 1 }], 2.4);
+    addTrackObstacle("X", [{ c: 16, r: 5 }, { c: 16, r: 9 }], 2.2);
+    addTrackObstacle("C", [{ c: 7, r: 4 }, { c: 8, r: 4 }, { c: 9, r: 4 }, { c: 10, r: 4 }, { c: 11, r: 4 }, { c: 12, r: 4 }, { c: 13, r: 4 }, { c: 13, r: 5 }, { c: 13, r: 6 }, { c: 13, r: 7 }, { c: 13, r: 8 }, { c: 13, r: 9 }, { c: 12, r: 9 }, { c: 11, r: 9 }, { c: 10, r: 9 }, { c: 9, r: 9 }, { c: 8, r: 9 }, { c: 7, r: 9 }, { c: 7, r: 8 }, { c: 7, r: 7 }, { c: 7, r: 6 }, { c: 7, r: 5 }, { c: 7, r: 4 }], 2.0);
+    levelText.setText("7-3");
+}
+
+// 7-4
+function W7L4() {
+    let map = [
+        "####################",
+        "#..................#",
+        "#######......####..#",
+        "#..................#",
+        "#......######......#",
+        "#......X....X......#",
+        "#..####X....X####..#",
+        "#..XXXXX..K.XXXXX.LD",
+        "#..####X....X####..#",
+        "#......X....X......#",
+        "#......######......#",
+        "#..................#",
+        "#######......####..#",
+        "#.................T#",
+        "####################",
+    ];
+    loadMap(map);
+    addHazardWall(0.45);
+    addTrackObstacle("C", [{ c: 4, r: 1 }, { c: 4, r: 5 }], 2.2);
+    addTrackObstacle("X", [{ c: 9, r: 3 }, { c: 9, r: 11 }], 2.6);
+    addTrackObstacle("C", [{ c: 14, r: 13 }, { c: 14, r: 9 }], 2.2);
+    addTrackObstacle("X", [{ c: 17, r: 4 }, { c: 17, r: 10 }], 2.5);
+    addTrackObstacle("C", [{ c: 5, r: 5 }, { c: 5, r: 4 }, { c: 5, r: 3 }, { c: 5, r: 2 }, { c: 5, r: 1 }], 2.6);
+    addTrackObstacle("C", [{ c: 15, r: 9 }, { c: 15, r: 10 }, { c: 15, r: 11 }, { c: 15, r: 12 }, { c: 15, r: 13 }], 2.6);
+    levelText.setText("7-4");
+}
+
+// 7-5
+function W7L5() {
+    let map = [
+        "####################",
+        "#........XX........#",
+        "#..##############..#",
+        "#..#.....XX.....#.H#",
+        "#..#....XXXX....####",
+        "#..X.C..X..X....#..#",
+        "#..X....X..X....#..#",
+        "#..X..C.X..X....X..D",
+        "#..X....X..X....#..#",
+        "#..X.C..X..X....#..#",
+        "#..#....XXXX....####",
+        "#..#.....XX.....#.H#",
+        "#..##############..#",
+        "#........XX........#",
+        "####################",
+    ];
+    loadMap(map);
+    addTrackObstacle("C", [{ c: 2, r: 1 }, { c: 17, r: 1 }, { c: 17, r: 13 }, { c: 2, r: 13 }], 3.6);
+    addTrackObstacle("C", [{ c: 17, r: 13 }, { c: 2, r: 13 }, { c: 2, r: 1 }, { c: 17, r: 1 }], 3.6);
+    addTrackObstacle("X", [{ c: 6, r: 3 }, { c: 13, r: 3 }, { c: 13, r: 11 }, { c: 6, r: 11 }], 2.5);
+    levelText.setText("7-5");
+}
+
+// 7-6
+function W7L6() {
+    let map = [
+        "####################",
+        "#K.......#....XX..F#",
+        "#........#....XX...#",
+        "#######XX#..######.#",
+        "#........#....X....#",
+        "#........L....X....#",
+        "#........#....X....#",
+        "#........#....X...LD",
+        "#........#....X....#",
+        "#........L....X....#",
+        "#........#....X....#",
+        "#XX#######..######.#",
+        "#........#....XX...#",
+        "#........#....XX..F#",
+        "####################",
+    ];
+    loadMap(map);
+    addTrackObstacle("C", [{ c: 3, r: 1 }, { c: 3, r: 13 }], 2.8);
+    addTrackObstacle("C", [{ c: 6, r: 13 }, { c: 6, r: 1 }], 2.8);
+    addTrackObstacle("X", [{ c: 11, r: 2 }, { c: 18, r: 2 }], 3.0);
+    addTrackObstacle("X", [{ c: 18, r: 7 }, { c: 11, r: 7 }], 3.4);
+    addTrackObstacle("X", [{ c: 11, r: 12 }, { c: 18, r: 12 }], 3.0);
+    addTrackObstacle("X", [{ c: 4, r: 13 }, { c: 5, r: 13 }, { c: 5, r: 12 }, { c: 4, r: 12 }, { c: 4, r: 11 }, { c: 5, r: 11 }, { c: 5, r: 10 }, { c: 4, r: 10 }, { c: 4, r: 9 }, { c: 5, r: 9 }, { c: 5, r: 8 }, { c: 4, r: 8 }, { c: 4, r: 7 }, { c: 5, r: 7 }, { c: 5, r: 6 }, { c: 4, r: 6 }, { c: 4, r: 5 }, { c: 5, r: 5 }, { c: 5, r: 4 }, { c: 4, r: 4 }, { c: 4, r: 3 }, { c: 5, r: 3 }, { c: 5, r: 2 }, { c: 4, r: 2 }, { c: 4, r: 1 }, { c: 5, r: 1 }], 5.0);
+    levelText.setText("7-6");
+}
+
+// 7-7
+function W7L7() {
+    let map = [
+        "####################",
+        "#S.............#...#",
+        "####...........#...#",
+        "#..#...........##..#",
+        "#..#.....#..XXXX#..#",
+        "#..#.....#.....X#.##",
+        "#..###C#.#.....X#..#",
+        "#......####....X#..D",
+        "#......#..#....X#..#",
+        "#..#####.......X#.##",
+        "#..#..XX....XXXX#..#",
+        "#..#..XX.XXXX.###..#",
+        "####..XXXX.##..#...#",
+        "#H.........#...X...#",
+        "####################",
+    ];
+    loadMap(map);
+    addTrackObstacle("X", [{ c: 5, r: 1 }, { c: 10, r: 1 }, { c: 10, r: 4 }, { c: 15, r: 4 }], 3.2);
+    addTrackObstacle("X", [{ c: 5, r: 13 }, { c: 10, r: 13 }, { c: 10, r: 10 }, { c: 15, r: 10 }], 3.2);
+    addTrackObstacle("C", [{ c: 17, r: 3 }, { c: 17, r: 11 }], 3.5);
+    addTrackObstacle("X", [{ c: 9, r: 8 }, { c: 9, r: 9 }, { c: 10, r: 9 }, { c: 11, r: 9 }, { c: 11, r: 8 }, { c: 11, r: 7 }, { c: 11, r: 6 }, { c: 10, r: 6 }, { c: 10, r: 5 }, { c: 10, r: 4 }], 2.0);
+    addTrackObstacle("X", [{ c: 1, r: 1 }, { c: 2, r: 1 }, { c: 3, r: 1 }, { c: 4, r: 1 }, { c: 4, r: 2 }, { c: 4, r: 3 }, { c: 4, r: 4 }, { c: 4, r: 5 }], 3.5);
+    levelText.setText("7-7");
+}
+
+// 7-8
+function W7L8() {
+    let map = [
+        "####################",
+        "#X....#......#.....#",
+        "#X.T.........#..K..#",
+        "#X....#......#.....#",
+        "#XXXXX#......#.....#",
+        "#########X#######..#",
+        "#............#.....#",
+        "#.......C..C.#....LD",
+        "#............#.....#",
+        "#########X#######..#",
+        "#XXXXX#X....X#.....#",
+        "#X.H.X#.........F..#",
+        "#X...........#.....#",
+        "#XXXXX#X....X#.....#",
+        "####################",
+    ];
+    loadMap(map);
+    addHazardWall(0.5);
+    addTrackObstacle("X", [{ c: 4, r: 6 }, { c: 4, r: 8 }], 1.0);
+    addTrackObstacle("C", [{ c: 9, r: 1 }, { c: 9, r: 13 }], 3.4);
+    addTrackObstacle("X", [{ c: 14, r: 8 }, { c: 14, r: 6 }], 1.0);
+    addTrackObstacle("C", [{ c: 5, r: 8 }, { c: 5, r: 7 }, { c: 5, r: 6 }], 2.0);
+    addTrackObstacle("C", [{ c: 15, r: 6 }, { c: 15, r: 7 }, { c: 15, r: 8 }], 2.0);
+    levelText.setText("7-8");
+}
+
+// 7-F
+function W7L9() {
+    let map = [
+        "XXXXXXXXXXXXXXXXXXXX",
+        "X..F..#......#..K..X",
+        "X....T#......#.....X",
+        "X..####..CC..####..X",
+        "X..X..X..CC..X.....X",
+        "X..X..X......X.....X",
+        "X..X..########.....X",
+        "X..X..#H.....X....LD",
+        "X..X..########.....X",
+        "X..X..X......X..F..X",
+        "X..X..X..XX..X.....X",
+        "X..####..XX..####..X",
+        "X....S#......#.....X",
+        "X..F..#......#..F..X",
+        "XXXXXXXXXXXXXXXXXXXX",
+    ];
+    loadMap(map);
+    addHazardWall(0.45);
+    addTrackObstacle("C", [{ c: 3, r: 2 }, { c: 8, r: 2 }, { c: 8, r: 5 }], 3.0);
+    addTrackObstacle("C", [{ c: 16, r: 2 }, { c: 11, r: 2 }, { c: 11, r: 5 }], 3.0);
+    addTrackObstacle("C", [{ c: 3, r: 12 }, { c: 8, r: 12 }, { c: 8, r: 9 }], 3.0);
+    addTrackObstacle("C", [{ c: 16, r: 12 }, { c: 11, r: 12 }, { c: 11, r: 9 }], 3.0);
+    levelText.setText("7-F");
+}
+
+main();
+    </script>
+</body>
+</html>
