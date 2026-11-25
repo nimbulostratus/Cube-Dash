@@ -148,7 +148,7 @@
             }
         }
 
-        // Render loop that sorts by .layer just like CodeHS
+        // Render loop that sorts by .layer
         function _renderLoop() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             const sorted = [..._objects].sort((a, b) => (a.layer || 0) - (b.layer || 0));
@@ -168,7 +168,7 @@
             }
         }
 
-        // Update button text automatically when entering/exiting fullscreen (even via Esc)
+        // Update button text automatically when entering/exiting fullscreen
         document.addEventListener("fullscreenchange", () => {
             const btn = document.getElementById("fullscreenBtn");
             btn.textContent = document.fullscreenElement ? "✕ EXIT FULLSCREEN (F)" : "⛶ FULLSCREEN (F)";
@@ -303,7 +303,7 @@ function main() {
     initBackground();
 	
 		if (DEBUG_LEVEL != null) {
-        // Automatically detects the world number from the function name (e.g., W5L1 -> World 5)
+        // Automatically detects the world number from the function name
         let match = DEBUG_LEVEL.name.match(/^W(\d+)/);
         let worldNum = match ? parseInt(match[1]) : 1;
         startDebugLevel(DEBUG_LEVEL, worldNum);
@@ -330,7 +330,7 @@ function loadSaveData() {
     }
 }
 
-// This is your save data for your best times and worlds unlocked, being uploaded to your account.
+// This is your save data for your best times and worlds unlocked.
 function saveGameData() {
     localStorage.setItem("cubeDash_unlockedWorlds", unlockedWorlds);
     localStorage.setItem("cubeDash_bestTimes", JSON.stringify(bestTimes));
@@ -393,7 +393,6 @@ function titleScreen() {
     let startX = (getWidth() - (btnW * 2 + gap)) / 2;
     let btnY = 310;
     
-    // PLAY BUTTON
     let playButton = new Rectangle(btnW, btnH);
     playButton.setPosition(startX, btnY);
     playButton.setColor("saddlebrown");
@@ -416,7 +415,6 @@ function titleScreen() {
         action: "OPEN_WORLD_SELECT"
     });
 
-    // LEVEL EDITOR BUTTON
     let edX = startX + btnW + gap;
     let editorButton = new Rectangle(btnW, btnH);
     editorButton.setPosition(edX, btnY);
@@ -660,7 +658,6 @@ function pauseGame() {
     movingUp = false;
     movingDown = false;
 
-    // Semi-transparent dark overlay
     let overlay = new Rectangle(getWidth(), getHeight());
     overlay.setPosition(0, 0);
     overlay.setColor("rgba(0, 0, 0, 0.65)");
@@ -668,7 +665,6 @@ function pauseGame() {
     add(overlay);
     pauseElements.push(overlay);
 
-    // Menu card
     let boxW = 300;
     let boxH = 310;
     let boxX = (getWidth() - boxW) / 2;
@@ -1372,7 +1368,7 @@ function takeDamage() {
         // Toggle color every 80ms for a rapid blink effect
         invulnBlinkInterval = setInterval(() => {
             if (!player || !isInvulnerable) return;
-            if (!isDash) { // Keep the white dash color intact if dashing
+            if (!isDash) {
                 blinkOn = !blinkOn;
                 player.setColor(blinkOn ? "gold" : BACKGROUND_COLOR);
             }
@@ -1596,9 +1592,6 @@ function update() {
     }
 }
 
-// ============================================================
-//  LEVEL EDITOR  (Mario Maker style: icon palette, recent bar, all-objects menu)
-// ============================================================
 let editorGrid = [];
 let editorTheme = 1;
 let editorHazardSpeed = 0;
@@ -1606,7 +1599,7 @@ let selectedTool = "#";
 let isMouseDown = false;
 let editorUI = [];
 let editorButtons = [];
-let editorPanel = null;       // null | "objects" | "hazard" | "colors" | "levels"
+let editorPanel = null;
 let editorSliderDrag = false;
 let editorLastSpeed = 0.65;
 let editorMenuLayout = null;
@@ -1616,9 +1609,6 @@ const EDITOR_TOP_H = 36;
 const EDITOR_BOTTOM_H = 48;
 const RECENT_SLOTS = 8;
 const RECENT_KEY = "cubeDash_editorRecent";
-
-// Every placeable object. To add a new one: add it here, give it an icon in drawToolIcon,
-// list it in EDITOR_MENU_SECTIONS, and handle its tile in loadMap().
 const EDITOR_TOOLS = [
     { tile: "#", label: "Wall",       desc: "Its a wall." },
     { tile: "X", label: "Block",      desc: "Square obstacle, dash through it." },
@@ -1674,7 +1664,6 @@ function toolInfo(tile) {
 }
 function selectTool(tile, fromRecentBar) {
     selectedTool = tile;
-    // Picking from the recent bar keeps its order; picking anywhere else moves it to the front.
     if (!fromRecentBar) pushRecent(tile);
 }
 
@@ -1706,10 +1695,6 @@ function addEditorLayer(layer, drawFn) {
     return o;
 }
 
-// ------------------------------------------------------------
-//  Icons: drawn exactly like the objects in the game (same shapes, colors and
-//  proportions, using the current world theme). Only the eraser is a tool icon.
-// ------------------------------------------------------------
 function drawToolIcon(tile, x, y, s, alpha) {
     ctx.save();
     ctx.globalAlpha = (alpha === undefined) ? 1 : alpha;
@@ -1769,9 +1754,6 @@ function drawToolIcon(tile, x, y, s, alpha) {
     ctx.restore();
 }
 
-// ------------------------------------------------------------
-//  Drawing: cursor preview, bottom palette bar, all-objects menu
-// ------------------------------------------------------------
 function drawEditorGridLines() {
     ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
     ctx.lineWidth = 1;
@@ -1952,9 +1934,6 @@ function drawEditorMenu() {
     );
 }
 
-// ------------------------------------------------------------
-//  In-game dialogs (the browser's prompt/confirm/alert aren't available here)
-// ------------------------------------------------------------
 let dialog = null;
 let dialogObj = null;
 let uiMouse = { x: -1, y: -1 };
@@ -2311,9 +2290,6 @@ function startWorldRun(wi) {
     playCustomLevel();
 }
 
-// ------------------------------------------------------------
-//  "My Worlds" screen
-// ------------------------------------------------------------
 function csText(str, font, x, y, color, centered) {
     let t = new Text(str, font);
     t.setPosition(centered ? (getWidth() - t.getWidth()) / 2 : x, y);
@@ -2854,9 +2830,6 @@ function drawEditorPanel() {
 
 }
 
-// ------------------------------------------------------------
-//  Level setup / rendering
-// ------------------------------------------------------------
 function initBlankEditorGrid() {
     editorGrid = blankGridStrings().map(s => s.split(""));
 }
@@ -3037,9 +3010,6 @@ function renderEditor() {
     }
 }
 
-// ------------------------------------------------------------
-//  Input
-// ------------------------------------------------------------
 function findTrackAt(c, r) {
     for (let i = editorTracks.length - 1; i >= 0; i--) {
         if (editorTracks[i].points.some(p => p.c === c && p.r === r)) return i;
