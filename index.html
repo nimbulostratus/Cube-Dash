@@ -79,14 +79,19 @@
             }
         }
 
-        function keyDownMethod(fn) {
-            window.addEventListener("keydown", (e) => {
-                if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(e.key)) {
-                    e.preventDefault(); // Stops arrow keys & spacebar from scrolling the browser
-                }
-                fn(e);
-            });
-        }
+		function keyDownMethod(fn) {
+			window.addEventListener("keydown", (e) => {
+				if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(e.key)) {
+					e.preventDefault();
+				}
+				if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === "r" || e.key.toLowerCase() === "z")) {
+					if (typeof GAME_STATE !== "undefined" && GAME_STATE === "EDITOR") {
+						e.preventDefault(); // Stops Ctrl+R from refreshing the browser
+					}
+				}
+				fn(e);
+			});
+		}
         function keyUpMethod(fn) { window.addEventListener("keyup", fn); }
 
         function mouseClickMethod(fn) {
@@ -148,7 +153,7 @@
             }
         }
 
-        // Render loop that sorts by .layer
+        // Render loop that sorts by .layer just like CodeHS
         function _renderLoop() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             const sorted = [..._objects].sort((a, b) => (a.layer || 0) - (b.layer || 0));
@@ -168,7 +173,7 @@
             }
         }
 
-        // Update button text automatically when entering/exiting fullscreen
+        // Update button text automatically when entering/exiting fullscreen (even via Esc)
         document.addEventListener("fullscreenchange", () => {
             const btn = document.getElementById("fullscreenBtn");
             btn.textContent = document.fullscreenElement ? "✕ EXIT FULLSCREEN (F)" : "⛶ FULLSCREEN (F)";
@@ -240,13 +245,22 @@ let levels = [
     W4L1, W4L2, W4L3, W4L4, W4L5, W4L6, W4L7, W4L8, W4L9,
     W5L1, W5L2, W5L3, W5L4, W5L5, W5L6, W5L7, W5L8, W5L9,
 	W6L1, W6L2, W6L3, W6L4, W6L5, W6L6, W6L7, W6L8, W6L9,
-	W7L1, W7L2, W7L3, W7L4, W7L5, W7L6, W7L7, W7L8, W7L9
+	W7L1, W7L2, W7L3, W7L4, W7L5, W7L6, W7L7, W7L8, W7L9,
+	W8L1, W8L2, W8L3, W8L4, W8L5, W8L6, W8L7, W8L8, W8L9,
+	W9L1, W9L2, W9L3, W9L4, W9L5, W9L6, W9L7, W9L8, W9L9
     ];
 let hazardWall = null;
 let hazardWallSpeed = 0;
 let editorTracks = [];
 let activeTrackIdx = -1;
 let editorLastTrackSpeed = 2.0;
+let editorLasers = [];
+let activeLaserIdx = -1;
+let editorLastLaserInterval = 2000;
+let editorCannons = [];
+let activeCannonIdx = -1;
+let activeCycleType = null; // "laser" | "cannon"
+let editorLastCannonInterval = 1500;
 
 const TILE_SIZE = 40;
 
@@ -274,24 +288,24 @@ let speedBoostTimeout = null;
 
 // Colors for all the objects on screen and how they change throughout the game.
 const WORLD_THEMES = {
-    1: { bg: "sienna",           wall: "saddlebrown",    player: "peru",           door: "chocolate",        gui: "moccasin" },
-    2: { bg: "lightsteelblue",   wall: "lightcyan",      player: "dodgerblue",     door: "paleturquoise",    gui: "hotpink" },
-    3: { bg: "darkolivegreen",   wall: "darkgreen",      player: "yellowgreen",    door: "mediumseagreen",   gui: "palegreen" },
-    4: { bg: "indigo",           wall: "rebeccapurple",  player: "violet",         door: "mediumpurple",     gui: "lavender" },
-    5: { bg: "darkred",          wall: "#1c0000",        player: "gold",           door: "coral",            gui: "mistyrose" },
-    6: { bg: "teal",             wall: "darkslategray",  player: "aquamarine",     door: "mediumturquoise",  gui: "lightcyan" },
-    7: { bg: "midnightblue",     wall: "navy",           player: "deepskyblue",    door: "royalblue",        gui: "aliceblue" },
-    8: { bg: "goldenrod",        wall: "darkgoldenrod",  player: "lemonchiffon",   door: "khaki",            gui: "white" },
-    9: { bg: "dimgray",          wall: "darkslategray",  player: "silver",         door: "lightgray",        gui: "white" },
-    10: { bg: "darkmagenta",     wall: "purple",         player: "hotpink",        door: "orchid",           gui: "pink" },
-    11: { bg: "seagreen",        wall: "darkslategray",  player: "springgreen",    door: "mediumaquamarine", gui: "honeydew" },
-    12: { bg: "darkslateblue",   wall: "midnightblue",   player: "cornflowerblue", door: "slateblue",        gui: "lavenderblush" },
-    13: { bg: "chocolate",       wall: "firebrick",      player: "sandybrown",     door: "tan",              gui: "cornsilk" },
-    14: { bg: "darkcyan",        wall: "teal",           player: "cyan",           door: "turquoise",        gui: "azure" },
-    15: { bg: "olive",           wall: "darkolivegreen", player: "greenyellow",    door: "yellowgreen",      gui: "lightyellow" },
-    16: { bg: "mediumvioletred", wall: "darkmagenta",    player: "lightpink",      door: "palevioletred",    gui: "seashell" },
-    17: { bg: "#1c1c1c",         wall: "#383838",        player: "white",          door: "silver",           gui: "gainsboro" },
-    18: { bg: "#1a1200",         wall: "darkgoldenrod",  player: "gold",           door: "khaki",            gui: "lightgoldenrodyellow" },
+    1:  { name: "Canyon",      bg: "sienna",           wall: "saddlebrown",    player: "peru",           door: "chocolate",        gui: "moccasin" },
+    2:  { name: "Glacier",     bg: "lightsteelblue",   wall: "lightcyan",      player: "dodgerblue",     door: "paleturquoise",    gui: "hotpink" },
+    3:  { name: "Forest",      bg: "darkolivegreen",   wall: "darkgreen",      player: "yellowgreen",    door: "mediumseagreen",   gui: "palegreen" },
+    4:  { name: "Twilight",    bg: "indigo",           wall: "rebeccapurple",  player: "violet",         door: "mediumpurple",     gui: "lavender" },
+    5:  { name: "Volcano",     bg: "darkred",          wall: "#1c0000",        player: "gold",           door: "coral",            gui: "mistyrose" },
+    6:  { name: "Lagoon",      bg: "teal",             wall: "darkslategray",  player: "aquamarine",     door: "mediumturquoise",  gui: "lightcyan" },
+    7:  { name: "Midnight",    bg: "midnightblue",     wall: "navy",           player: "deepskyblue",    door: "royalblue",        gui: "aliceblue" },
+    8:  { name: "Desert",      bg: "goldenrod",        wall: "darkgoldenrod",  player: "lemonchiffon",   door: "khaki",            gui: "white" },
+    9:  { name: "Factory",     bg: "dimgray",          wall: "darkslategray",  player: "silver",         door: "lightgray",        gui: "white" },
+    10: { name: "Neon",        bg: "darkmagenta",      wall: "purple",         player: "hotpink",        door: "orchid",           gui: "pink" },
+    11: { name: "Jungle",      bg: "seagreen",         wall: "darkslategray",  player: "springgreen",    door: "mediumaquamarine", gui: "honeydew" },
+    12: { name: "Starlight",   bg: "darkslateblue",    wall: "midnightblue",   player: "cornflowerblue", door: "slateblue",        gui: "lavenderblush" },
+    13: { name: "Autumn",      bg: "chocolate",        wall: "firebrick",      player: "sandybrown",     door: "tan",              gui: "cornsilk" },
+    14: { name: "Ocean",       bg: "darkcyan",         wall: "teal",           player: "cyan",           door: "turquoise",        gui: "azure" },
+    15: { name: "Swamp",       bg: "olive",            wall: "darkolivegreen", player: "greenyellow",    door: "yellowgreen",      gui: "lightyellow" },
+    16: { name: "Sakura",      bg: "mediumvioletred",  wall: "darkmagenta",    player: "lightpink",      door: "palevioletred",    gui: "seashell" },
+    17: { name: "Monochrome",  bg: "#1c1c1c",          wall: "#383838",        player: "white",          door: "silver",           gui: "gainsboro" },
+    18: { name: "Champions Road", bg: "#1a1200",          wall: "darkgoldenrod",  player: "gold",           door: "khaki",            gui: "lightgoldenrodyellow" },
 };
 
 const DEFAULT_THEME = { bg: "sienna", wall: "saddlebrown", player: "peru", door: "chocolate", gui: "moccasin" };
@@ -303,7 +317,7 @@ function main() {
     initBackground();
 	
 		if (DEBUG_LEVEL != null) {
-        // Automatically detects the world number from the function name
+        // Automatically detects the world number from the function name (e.g., W5L1 -> World 5)
         let match = DEBUG_LEVEL.name.match(/^W(\d+)/);
         let worldNum = match ? parseInt(match[1]) : 1;
         startDebugLevel(DEBUG_LEVEL, worldNum);
@@ -330,7 +344,7 @@ function loadSaveData() {
     }
 }
 
-// This is your save data for your best times and worlds unlocked.
+// This is your save data for your best times and worlds unlocked, being uploaded to your account.
 function saveGameData() {
     localStorage.setItem("cubeDash_unlockedWorlds", unlockedWorlds);
     localStorage.setItem("cubeDash_bestTimes", JSON.stringify(bestTimes));
@@ -393,6 +407,7 @@ function titleScreen() {
     let startX = (getWidth() - (btnW * 2 + gap)) / 2;
     let btnY = 310;
     
+    // PLAY BUTTON
     let playButton = new Rectangle(btnW, btnH);
     playButton.setPosition(startX, btnY);
     playButton.setColor("saddlebrown");
@@ -415,6 +430,7 @@ function titleScreen() {
         action: "OPEN_WORLD_SELECT"
     });
 
+    // LEVEL EDITOR BUTTON
     let edX = startX + btnW + gap;
     let editorButton = new Rectangle(btnW, btnH);
     editorButton.setPosition(edX, btnY);
@@ -658,6 +674,7 @@ function pauseGame() {
     movingUp = false;
     movingDown = false;
 
+    // Semi-transparent dark overlay
     let overlay = new Rectangle(getWidth(), getHeight());
     overlay.setPosition(0, 0);
     overlay.setColor("rgba(0, 0, 0, 0.65)");
@@ -665,6 +682,7 @@ function pauseGame() {
     add(overlay);
     pauseElements.push(overlay);
 
+    // Menu card
     let boxW = 300;
     let boxH = 310;
     let boxX = (getWidth() - boxW) / 2;
@@ -928,6 +946,7 @@ function updateHazardWall() {
 
 let trackObstacles = [];
 let trackLines = [];
+let lasers = [];
 
 function addTrackObstacle(type, points, speed) {
     if (!points || points.length < 2) return;
@@ -1029,6 +1048,244 @@ function updateTrackObstacles() {
             tr.obj.setPosition(curX + TILE_SIZE / 2, curY + TILE_SIZE / 2);
         } else {
             tr.obj.setPosition(curX, curY);
+        }
+    }
+}
+
+function addLaser(col, row, dir, intervalMs, activeMs, offsetMs) {
+    dir = dir || "D";
+    intervalMs = Math.max(400, intervalMs || 2200);
+    activeMs = Math.max(150, Math.min(intervalMs - 150, activeMs || Math.round(intervalMs * 0.45)));
+    offsetMs = offsetMs || 0;
+
+    const beamThickness = 10;
+    const emitterSize = 18;
+    const cx = col * TILE_SIZE + TILE_SIZE / 2;
+    const cy = row * TILE_SIZE + TILE_SIZE / 2;
+
+    // Trace the beam from (col, row) until it hits a wall ("#") or locked door ("L") or room edge
+    let endX = cx, endY = cy;
+    let dc = dir === "R" ? 1 : (dir === "L" ? -1 : 0);
+    let dr = dir === "D" ? 1 : (dir === "U" ? -1 : 0);
+    let tc = col + dc, tr = row + dr;
+
+    while (tc >= 0 && tc < 20 && tr >= 0 && tr < 15) {
+        let tx = tc * TILE_SIZE + TILE_SIZE / 2;
+        let ty = tr * TILE_SIZE + TILE_SIZE / 2;
+        let blocked = walls.some(w =>
+            tx >= w.getX() && tx <= w.getX() + w.getWidth() &&
+            ty >= w.getY() && ty <= w.getY() + w.getHeight()
+        );
+        if (blocked) break;
+        endX = tx;
+        endY = ty;
+        tc += dc;
+        tr += dr;
+    }
+
+    // Extend to the edge of the last open tile
+    endX += dc * (TILE_SIZE / 2);
+    endY += dr * (TILE_SIZE / 2);
+
+    const bx = Math.min(cx, endX) - (dc === 0 ? beamThickness / 2 : 0);
+    const by = Math.min(cy, endY) - (dr === 0 ? beamThickness / 2 : 0);
+    const bw = dc !== 0 ? Math.abs(endX - cx) : beamThickness;
+    const bh = dr !== 0 ? Math.abs(endY - cy) : beamThickness;
+
+    const laserObj = {
+        col, row, dir, intervalMs, activeMs, offsetMs,
+        cx, cy, endX, endY, bx, by, bw, bh,
+        isActive: false,
+        isWarning: false,
+        timer: offsetMs % intervalMs,
+        gfx: null
+    };
+
+    const gfx = new GObject();
+    gfx.layer = 2.6;
+    gfx.draw = function() {
+        ctx.save();
+        // 1. Draw the laser beam (solid when active, thin dashed warning line right before firing)
+        if (laserObj.isActive) {
+            ctx.fillStyle = "rgba(255, 40, 40, 0.35)";
+            ctx.fillRect(
+                laserObj.bx - (dr === 0 ? 0 : 4),
+                laserObj.by - (dc === 0 ? 0 : 4),
+                laserObj.bw + (dr === 0 ? 0 : 8),
+                laserObj.bh + (dc === 0 ? 0 : 8)
+            );
+            ctx.fillStyle = OBSTACLE_COLOR;
+            ctx.fillRect(laserObj.bx, laserObj.by, laserObj.bw, laserObj.bh);
+            ctx.fillStyle = "white";
+            ctx.fillRect(
+                laserObj.bx + (dr === 0 ? 0 : 3),
+                laserObj.by + (dc === 0 ? 0 : 3),
+                laserObj.bw - (dr === 0 ? 0 : 6),
+                laserObj.bh - (dc === 0 ? 0 : 6)
+            );
+        } else if (laserObj.isWarning) {
+            ctx.strokeStyle = "rgba(255, 80, 80, 0.75)";
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6, 6]);
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(endX, endY);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        // 2. Draw the emitter turret base + directional nozzle
+        ctx.fillStyle = "#222";
+        ctx.fillRect(cx - emitterSize / 2, cy - emitterSize / 2, emitterSize, emitterSize);
+        ctx.strokeStyle = laserObj.isActive ? "white" : (laserObj.isWarning ? "gold" : OBSTACLE_COLOR);
+        ctx.lineWidth = 2;
+        ctx.strokeRect(cx - emitterSize / 2, cy - emitterSize / 2, emitterSize, emitterSize);
+
+        // Nozzle tip pointing in firing direction
+        ctx.fillStyle = laserObj.isActive ? "white" : OBSTACLE_COLOR;
+        ctx.fillRect(cx + dc * 7 - 4, cy + dr * 7 - 4, 8, 8);
+        ctx.restore();
+    };
+
+    add(gfx);
+    laserObj.gfx = gfx;
+    lasers.push(laserObj);
+    return laserObj;
+}
+
+function updateLasers() {
+    if (timeFrozen) return;
+    const dt = 10; // matches setTimer(run, 10)
+    const warnWindow = 350;
+
+    for (let i = 0; i < lasers.length; i++) {
+        let l = lasers[i];
+        l.timer = (l.timer + dt) % l.intervalMs;
+        let offDuration = l.intervalMs - l.activeMs;
+
+        l.isActive = l.timer >= offDuration;
+        l.isWarning = !l.isActive && l.timer >= Math.max(0, offDuration - warnWindow);
+
+        if (l.isActive && !isDash && !isInvulnerable) {
+            if (rectsOverlap(curPlayerX, curPlayerY, PLAYER_SIZE, PLAYER_SIZE, l.bx, l.by, l.bw, l.bh)) {
+                takeDamage();
+                break;
+            }
+        }
+    }
+}
+
+let cannons = [];
+let cannonBullets = [];
+
+function addCannon(col, row, dir, intervalMs, bulletSpeed, offsetMs) {
+    dir = dir || "D";
+    intervalMs = Math.max(300, intervalMs || 1500);
+    bulletSpeed = Math.max(1.0, bulletSpeed || 4.0);
+    offsetMs = offsetMs || 0;
+
+    const cx = col * TILE_SIZE + TILE_SIZE / 2;
+    const cy = row * TILE_SIZE + TILE_SIZE / 2;
+    const dc = dir === "R" ? 1 : (dir === "L" ? -1 : 0);
+    const dr = dir === "D" ? 1 : (dir === "U" ? -1 : 0);
+
+    const cannonObj = {
+        col, row, dir, intervalMs, bulletSpeed, offsetMs,
+        cx, cy, dc, dr,
+        timer: offsetMs % intervalMs,
+        recoil: 0,
+        gfx: null
+    };
+
+    const gfx = new GObject();
+    gfx.layer = 2.6;
+    gfx.draw = function() {
+        ctx.save();
+        // Turret base (circular housing so it looks distinct from square laser emitters)
+        ctx.fillStyle = "#222";
+        ctx.beginPath();
+        ctx.arc(cx, cy, 11, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = OBSTACLE_COLOR;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Cannon barrel with subtle firing recoil
+        const shift = cannonObj.recoil;
+        const bx = cx + dc * (8 - shift) - (dc !== 0 ? 5 : 4);
+        const by = cy + dr * (8 - shift) - (dr !== 0 ? 5 : 4);
+        const bw = dc !== 0 ? 10 : 8;
+        const bh = dr !== 0 ? 10 : 8;
+        ctx.fillStyle = shift > 1 ? "white" : OBSTACLE_COLOR;
+        ctx.fillRect(bx, by, bw, bh);
+        ctx.restore();
+    };
+
+    add(gfx);
+    cannonObj.gfx = gfx;
+    cannons.push(cannonObj);
+    return cannonObj;
+}
+
+function spawnCannonBullet(c) {
+    const radius = 6;
+    const bx = c.cx + c.dc * 12;
+    const by = c.cy + c.dr * 12;
+
+    const bulletGfx = new Circle(radius);
+    bulletGfx.setPosition(bx, by);
+    bulletGfx.setColor(OBSTACLE_COLOR);
+    bulletGfx.layer = 2.5;
+    add(bulletGfx);
+
+    cannonBullets.push({
+        x: bx,
+        y: by,
+        vx: c.dc * c.bulletSpeed,
+        vy: c.dr * c.bulletSpeed,
+        r: radius,
+        gfx: bulletGfx
+    });
+}
+
+function updateCannons() {
+    if (timeFrozen) return;
+    const dt = 10; // matches setTimer(run, 10)
+
+    // 1. Advance cannon timers & fire pellets
+    for (let i = 0; i < cannons.length; i++) {
+        let c = cannons[i];
+        if (c.recoil > 0) c.recoil = Math.max(0, c.recoil - 0.3);
+        let prev = c.timer;
+        c.timer = (c.timer + dt) % c.intervalMs;
+        if (c.timer < prev) {
+            c.recoil = 3;
+            spawnCannonBullet(c);
+        }
+    }
+
+    // 2. Move pellets, check wall hits, and check player hits
+    for (let i = cannonBullets.length - 1; i >= 0; i--) {
+        let b = cannonBullets[i];
+        b.x += b.vx;
+        b.y += b.vy;
+        b.gfx.setPosition(b.x, b.y);
+
+        // Remove if off-screen or hitting a wall / locked door
+        let hitWall = b.x < 0 || b.x > getWidth() || b.y < 0 || b.y > getHeight() ||
+            walls.some(w => circleRectOverlap(b.x, b.y, b.r, w.getX(), w.getY(), w.getWidth(), w.getHeight()));
+
+        if (hitWall) {
+            remove(b.gfx);
+            cannonBullets.splice(i, 1);
+            continue;
+        }
+
+        // Hit player (respecting dash & invulnerability)
+        if (!isDash && !isInvulnerable &&
+            circleRectOverlap(b.x, b.y, b.r, curPlayerX, curPlayerY, PLAYER_SIZE, PLAYER_SIZE)) {
+            takeDamage();
+            break;
         }
     }
 }
@@ -1238,6 +1495,8 @@ function run() {
     checkKeyCollisions();
     updateHazardWall();
     updateTrackObstacles();
+	updateLasers();
+	updateCannons();
     
 	for (let i = 0; i < doors.length; i++) {
 		let d = doors[i];
@@ -1368,7 +1627,7 @@ function takeDamage() {
         // Toggle color every 80ms for a rapid blink effect
         invulnBlinkInterval = setInterval(() => {
             if (!player || !isInvulnerable) return;
-            if (!isDash) {
+            if (!isDash) { // Keep the white dash color intact if dashing
                 blinkOn = !blinkOn;
                 player.setColor(blinkOn ? "gold" : BACKGROUND_COLOR);
             }
@@ -1497,10 +1756,26 @@ function clearLevel() {
 	doors = [];
 	
     trackObstacles = [];
-    for (let i = 0; i < trackLines.length; i++) {
+    
+	for (let i = 0; i < trackLines.length; i++) {
         remove(trackLines[i]);
     }
     trackLines = [];
+   
+	for (let i = 0; i < lasers.length; i++) {
+        if (lasers[i].gfx) remove(lasers[i].gfx);
+    }
+    lasers = [];
+	
+	for (let i = 0; i < cannons.length; i++) {
+        if (cannons[i].gfx) remove(cannons[i].gfx);
+    }
+    cannons = [];
+	
+    for (let i = 0; i < cannonBullets.length; i++) {
+        remove(cannonBullets[i].gfx);
+    }
+    cannonBullets = [];
 }
 
 function loadNextLevel() {
@@ -1592,6 +1867,9 @@ function update() {
     }
 }
 
+// ============================================================
+//  LEVEL EDITOR  (Mario Maker style: icon palette, recent bar, all-objects menu)
+// ============================================================
 let editorGrid = [];
 let editorTheme = 1;
 let editorHazardSpeed = 0;
@@ -1599,22 +1877,78 @@ let selectedTool = "#";
 let isMouseDown = false;
 let editorUI = [];
 let editorButtons = [];
-let editorPanel = null;
+let editorPanel = null;       // null | "objects" | "hazard" | "colors" | "levels"
 let editorSliderDrag = false;
 let editorLastSpeed = 0.65;
 let editorMenuLayout = null;
 let editorMouse = { x: -1, y: -1 };
 
+let editorUndoStack = [];
+let editorRedoStack = [];
+let pendingSnapshot = null;
+
+function createEditorSnapshot() {
+    return JSON.stringify({
+        grid: editorGrid,
+        theme: editorTheme,
+        speed: editorHazardSpeed,
+        tracks: editorTracks,
+        lasers: editorLasers,
+        cannons: editorCannons
+    });
+}
+
+function pushUndoSnapshot(snap) {
+    if (!snap) return;
+    // Only save if something actually changed
+    if (editorUndoStack.length > 0 && editorUndoStack[editorUndoStack.length - 1] === snap) return;
+    editorUndoStack.push(snap);
+    if (editorUndoStack.length > 50) editorUndoStack.shift(); // Cap at 50 steps
+    editorRedoStack = []; // Clear redo stack whenever a new edit happens
+}
+
+function applyEditorSnapshot(snapStr) {
+    const data = JSON.parse(snapStr);
+    editorGrid = data.grid;
+    editorTheme = data.theme;
+    editorHazardSpeed = data.speed;
+    editorTracks = data.tracks;
+    editorLasers = data.lasers;
+    editorCannons = data.cannons;
+
+    activeTrackIdx = editorTracks.length > 0 ? Math.min(activeTrackIdx, editorTracks.length - 1) : -1;
+    activeLaserIdx = editorLasers.length > 0 ? Math.min(activeLaserIdx, editorLasers.length - 1) : -1;
+    activeCannonIdx = editorCannons.length > 0 ? Math.min(activeCannonIdx, editorCannons.length - 1) : -1;
+
+    renderEditor();
+    commitEditorLevel();
+}
+
+function undoEditor() {
+    if (editorUndoStack.length === 0) return;
+    editorRedoStack.push(createEditorSnapshot());
+    applyEditorSnapshot(editorUndoStack.pop());
+}
+
+function redoEditor() {
+    if (editorRedoStack.length === 0) return;
+    editorUndoStack.push(createEditorSnapshot());
+    applyEditorSnapshot(editorRedoStack.pop());
+}
+
 const EDITOR_TOP_H = 36;
 const EDITOR_BOTTOM_H = 48;
 const RECENT_SLOTS = 8;
 const RECENT_KEY = "cubeDash_editorRecent";
+
+// Every placeable object. To add a new one: add it here, give it an icon in drawToolIcon,
+// list it in EDITOR_MENU_SECTIONS, and handle its tile in loadMap().
 const EDITOR_TOOLS = [
     { tile: "#", label: "Wall",       desc: "Its a wall." },
     { tile: "X", label: "Block",      desc: "Square obstacle, dash through it." },
     { tile: "C", label: "Orb",        desc: "Circle obstacle, dash through it." },
-    { tile: "=", label: "Moving Box", desc: "Drag across tiles to make a moving square." },
-    { tile: "O", label: "Moving Orb", desc: "Drag across tiles to make a moving orb." },
+    { tile: "=", label: "Moving Box", desc: "Drag across tiles to make a moving square. Use the track button to set movement speed." },
+    { tile: "O", label: "Moving Orb", desc: "Drag across tiles to make a moving orb. Use the track button to set movement speed." },
     { tile: "D", label: "Door",       desc: "Leads to the next level or the end." },
     { tile: "K", label: "Key",        desc: "Opens locked doors." },
     { tile: "L", label: "Lock",       desc: "Locked door that needs a key." },
@@ -1623,14 +1957,16 @@ const EDITOR_TOOLS = [
     { tile: "T", label: "Time",       desc: "Freezes the timer for 5 seconds." },
     { tile: "S", label: "Speed",      desc: "Speed boost for 7 seconds." },
     { tile: "P", label: "Spawn",      desc: "Starting position for the player." },
-    { tile: ".", label: "Erase",      desc: "Erases tiles or tracks." }
+    { tile: ".", label: "Erase",      desc: "Erases tiles or tracks." },
+	{ tile: "B", label: "Cannon",     desc: "Shoots pellets on a cycle. Click again to rotate; CYCLE sets speed." },
+	{ tile: "*", label: "Laser",      desc: "Click to place, click again to rotate. Use the Laser button to set speed." }
 ];
 
 const EDITOR_HAZARD_ENTRY = { tile: "~", label: "Hazard Wall", desc: "Rapidly approaching wall, you cant dash through it btw." };
 
 const EDITOR_MENU_SECTIONS = [
     { col: 0, title: "BUILDING",     items: ["#", "D"] },
-    { col: 0, title: "HAZARDS",      items: ["X", "C", "=", "O", "~"] },
+	{ col: 0, title: "HAZARDS",      items: ["X", "C", "=", "O", "*", "B", "~"] },
     { col: 0, title: "PLAYER",       items: ["P", "."] },
     { col: 1, title: "KEYS & LOCKS", items: ["K", "L", "F"] },
     { col: 1, title: "POWER-UPS",    items: ["H", "T", "S"] }
@@ -1664,6 +2000,7 @@ function toolInfo(tile) {
 }
 function selectTool(tile, fromRecentBar) {
     selectedTool = tile;
+    // Picking from the recent bar keeps its order; picking anywhere else moves it to the front.
     if (!fromRecentBar) pushRecent(tile);
 }
 
@@ -1695,6 +2032,10 @@ function addEditorLayer(layer, drawFn) {
     return o;
 }
 
+// ------------------------------------------------------------
+//  Icons: drawn exactly like the objects in the game (same shapes, colors and
+//  proportions, using the current world theme). Only the eraser is a tool icon.
+// ------------------------------------------------------------
 function drawToolIcon(tile, x, y, s, alpha) {
     ctx.save();
     ctx.globalAlpha = (alpha === undefined) ? 1 : alpha;
@@ -1738,6 +2079,25 @@ function drawToolIcon(tile, x, y, s, alpha) {
         const ps = s * (PLAYER_SIZE / TILE_SIZE);
         ctx.fillStyle = PLAYER_COLOR;
         ctx.fillRect(cx - ps / 2, cy - ps / 2, ps, ps);
+	} else if (tile === "*") {
+		// Thin glowing beam + turret box icon
+		ctx.fillStyle = OBSTACLE_COLOR;
+		ctx.fillRect(cx - 3, y + s * 0.1, 6, s * 0.8);
+		ctx.fillStyle = "white";
+		ctx.fillRect(cx - 1, y + s * 0.1, 2, s * 0.8);
+		ctx.fillStyle = "#222";
+		ctx.fillRect(cx - s * 0.25, cy - s * 0.25, s * 0.5, s * 0.5);
+		ctx.strokeStyle = OBSTACLE_COLOR;
+		ctx.lineWidth = 2;
+		ctx.strokeRect(cx - s * 0.25, cy - s * 0.25, s * 0.5, s * 0.5);
+	} else if (tile === "B") {
+		ctx.fillStyle = "#222";
+		ctx.beginPath(); ctx.arc(cx, cy - s * 0.12, s * 0.24, 0, Math.PI * 2); ctx.fill();
+		ctx.strokeStyle = OBSTACLE_COLOR; ctx.lineWidth = 2; ctx.stroke();
+		ctx.fillStyle = OBSTACLE_COLOR;
+		ctx.fillRect(cx - 3, cy + s * 0.05, 6, s * 0.18);
+		circle(s * 0.11, OBSTACLE_COLOR); // pellet preview below barrel
+		ctx.beginPath(); ctx.arc(cx, y + s * 0.82, s * 0.11, 0, Math.PI * 2); ctx.fill();
     } else if (tile === ".") {
         // Eraser (a tool, not a game object)
         ctx.translate(cx, cy);
@@ -1754,6 +2114,9 @@ function drawToolIcon(tile, x, y, s, alpha) {
     ctx.restore();
 }
 
+// ------------------------------------------------------------
+//  Drawing: cursor preview, bottom palette bar, all-objects menu
+// ------------------------------------------------------------
 function drawEditorGridLines() {
     ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
     ctx.lineWidth = 1;
@@ -1934,6 +2297,9 @@ function drawEditorMenu() {
     );
 }
 
+// ------------------------------------------------------------
+//  In-game dialogs (the browser's prompt/confirm/alert aren't available here)
+// ------------------------------------------------------------
 let dialog = null;
 let dialogObj = null;
 let uiMouse = { x: -1, y: -1 };
@@ -2213,7 +2579,7 @@ function blankGridStrings() {
 }
 
 function blankLevelData(theme) {
-    return { name: "", grid: blankGridStrings(), theme: theme || 1, speed: 0, tracks: [] };
+    return { name: "", grid: blankGridStrings(), theme: theme || 1, speed: 0, tracks: [], lasers: [], cannons: [] };
 }
 
 function sanitizeTracks(raw) {
@@ -2227,6 +2593,40 @@ function sanitizeTracks(raw) {
                 c: Math.max(0, Math.min(19, parseInt(p.c) || 0)),
                 r: Math.max(0, Math.min(14, parseInt(p.r) || 0))
             }))
+        }));
+}
+
+function sanitizeLasers(raw) {
+    if (!Array.isArray(raw)) return [];
+    const validDirs = ["R", "L", "D", "U"];
+    return raw
+        .filter(l => l && typeof l.c === "number" && typeof l.r === "number")
+        .map(l => {
+            const intervalMs = Math.max(400, Math.min(10000, parseInt(l.intervalMs) || 2000));
+            const activeMs = Math.max(150, Math.min(intervalMs - 150, parseInt(l.activeMs) || Math.round(intervalMs * 0.45)));
+            return {
+                c: Math.max(0, Math.min(19, parseInt(l.c) || 0)),
+                r: Math.max(0, Math.min(14, parseInt(l.r) || 0)),
+                dir: validDirs.includes(l.dir) ? l.dir : "D",
+                intervalMs,
+                activeMs,
+                offsetMs: Math.max(0, Math.min(10000, parseInt(l.offsetMs) || 0))
+            };
+        });
+}
+
+function sanitizeCannons(raw) {
+    if (!Array.isArray(raw)) return [];
+    const validDirs = ["R", "L", "D", "U"];
+    return raw
+        .filter(c => c && typeof c.c === "number" && typeof c.r === "number")
+        .map(c => ({
+            c: Math.max(0, Math.min(19, parseInt(c.c) || 0)),
+            r: Math.max(0, Math.min(14, parseInt(c.r) || 0)),
+            dir: validDirs.includes(c.dir) ? c.dir : "D",
+            intervalMs: Math.max(300, Math.min(10000, parseInt(c.intervalMs) || 1500)),
+            bulletSpeed: Math.max(1.0, Math.min(15.0, parseFloat(c.bulletSpeed) || 4.0)),
+            offsetMs: Math.max(0, Math.min(10000, parseInt(c.offsetMs) || 0))
         }));
 }
 
@@ -2244,7 +2644,9 @@ function loadCustomWorlds() {
                         grid: (l && Array.isArray(l.grid) && l.grid.length === 15) ? l.grid.map(String) : blankGridStrings(),
                         theme: Math.max(1, Math.min(TOTAL_WORLDS, parseInt(l && l.theme) || 1)),
                         speed: Math.max(0, parseFloat(l && l.speed) || 0),
-                        tracks: sanitizeTracks(l && l.tracks)
+                        tracks: sanitizeTracks(l && l.tracks),
+						lasers: sanitizeLasers(l && l.lasers),
+						cannons: sanitizeCannons(l && l.cannons)
                     }))
                 }));
         }
@@ -2266,6 +2668,8 @@ function commitEditorLevel() {
     lv.speed = editorHazardSpeed;
     // Only save tracks that have at least 2 waypoints
     lv.tracks = sanitizeTracks(editorTracks);
+	lv.lasers = sanitizeLasers(editorLasers);
+	lv.cannons = sanitizeCannons(editorCannons);
     saveCustomWorlds();
 }
 
@@ -2279,6 +2683,14 @@ function loadEditorLevel(wi, li) {
     editorTracks = sanitizeTracks(lv.tracks);
     activeTrackIdx = editorTracks.length > 0 ? 0 : -1;
     if (lv.speed > 0) editorLastSpeed = lv.speed;
+	editorLasers = sanitizeLasers(lv.lasers);
+	activeLaserIdx = editorLasers.length > 0 ? 0 : -1;
+	editorCannons = sanitizeCannons(lv.cannons);
+	activeCannonIdx = editorCannons.length > 0 ? 0 : -1;
+	activeCycleType = activeCannonIdx >= 0 ? "cannon" : (activeLaserIdx >= 0 ? "laser" : null);
+    editorUndoStack = [];
+    editorRedoStack = [];
+    pendingSnapshot = null;
 }
 
 function startEditWorld(wi) {
@@ -2290,6 +2702,9 @@ function startWorldRun(wi) {
     playCustomLevel();
 }
 
+// ------------------------------------------------------------
+//  "My Worlds" screen
+// ------------------------------------------------------------
 function csText(str, font, x, y, color, centered) {
     let t = new Text(str, font);
     t.setPosition(centered ? (getWidth() - t.getWidth()) / 2 : x, y);
@@ -2520,6 +2935,198 @@ function drawTrackPanel() {
     ctx.stroke();
 }
 
+function setLaserInterval(ms) {
+    if (activeLaserIdx < 0 || !editorLasers[activeLaserIdx]) return;
+    const lz = editorLasers[activeLaserIdx];
+    const ratio = lz.activeMs / lz.intervalMs;
+    ms = Math.max(400, Math.min(10000, Math.round(ms / 50) * 50));
+    lz.intervalMs = ms;
+    lz.activeMs = Math.max(150, Math.min(ms - 150, Math.round(ms * ratio)));
+    editorLastLaserInterval = ms;
+    renderEditor();
+}
+
+function setLaserIntervalFromX(mx) {
+    let s = editorMenuLayout && editorMenuLayout.slider;
+    if (!s) return;
+    let t = Math.max(0, Math.min(1, (mx - s.x) / s.w));
+    // Slider spans 500ms (0.5s) to 4000ms (4.0s) in 100ms steps
+    setLaserInterval(500 + Math.round((t * 3500) / 100) * 100);
+}
+
+function buildLaserPanel() {
+    const PX = 180, PY = 90, PW = 440, PH = 385;
+    editorMenuLayout = { panel: { x: PX, y: PY, w: PW, h: PH }, slider: { x: PX + 40, y: PY + 152, w: PW - 80 } };
+    const G = "menu";
+    pushCloseX(PX, PY, PW);
+
+    editorButtons.push({ x: PX + 20, y: PY + 64, w: 110, h: 40, action: "LZ_DELETE", group: G, label: "DELETE LASER", color: "crimson" });
+    editorButtons.push({ x: PX + 30, y: PY + 130, w: PW - 60, h: 44, action: "LZ_SLIDER", group: G });
+
+    [["-0.5s", -500], ["-0.1s", -100], ["+0.1s", 100], ["+0.5s", 500]].forEach((s, i) => {
+        editorButtons.push({ x: PX + 20 + i * 104, y: PY + 192, w: 96, h: 32, action: "LZ_STEP", delta: s[1], group: G, label: s[0], color: "#444" });
+    });
+
+    [["Fast 0.8s", 800], ["Med 1.5s", 1500], ["Norm 2.2s", 2200], ["Slow 3.5s", 3500]].forEach((s, i) => {
+        editorButtons.push({ x: PX + 20 + i * 104, y: PY + 238, w: 96, h: 32, action: "LZ_SET", value: s[1], group: G, label: s[0], color: "#5a4636" });
+    });
+
+    editorButtons.push({ x: PX + 20,  y: PY + 284, w: 130, h: 32, action: "LZ_ROTATE", group: G, label: "ROTATE", color: "#444" });
+    editorButtons.push({ x: PX + 155, y: PY + 284, w: 130, h: 32, action: "LZ_DUTY",   group: G, label: "ON TIME LENGTH", color: "#444" });
+    editorButtons.push({ x: PX + 290, y: PY + 284, w: 130, h: 32, action: "LZ_OFFSET", group: G, label: "DELAY +0.5s", color: "#444" });
+
+    editorButtons.push({ x: PX + 20, y: PY + 332, w: 200, h: 36, action: "LZ_TYPE", group: G, label: "TYPE INTERVAL (ms)", color: "teal" });
+    editorButtons.push({ x: PX + PW - 120, y: PY + 332, w: 100, h: 36, action: "CLOSE_MENU", group: G, label: "DONE", color: "forestgreen" });
+}
+
+function drawLaserPanel() {
+    const lz = editorLasers[activeLaserIdx];
+    if (!lz) { editorPanel = null; renderEditor(); return; }
+    const dirNames = { D: "DOWN", R: "RIGHT", U: "UP", L: "LEFT" };
+    drawPanelFrame("LASER #" + (activeLaserIdx + 1) + " (" + (dirNames[lz.dir] || lz.dir) + ")");
+    const p = editorMenuLayout.panel, s = editorMenuLayout.slider;
+    for (const b of editorButtons) {
+        if (b.group === "menu" && b.label) drawPanelBtn(b);
+    }
+
+    const sec = (lz.intervalMs / 1000).toFixed(2) + "s";
+    const onSec = (lz.activeMs / 1000).toFixed(2) + "s";
+    const offSec = (lz.offsetMs / 1000).toFixed(2) + "s";
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "crimson";
+    ctx.font = "bold 28px Verdana";
+    ctx.fillText(sec + " cycle", p.x + 280, p.y + 92);
+    ctx.fillStyle = "#bbbbbb";
+    ctx.font = "11px Verdana";
+    ctx.fillText("Beam ON: " + onSec + "  |  Delay: " + offSec, p.x + 280, p.y + 114);
+    ctx.textAlign = "left";
+
+    // Slider bar (0.5s to 4.0s)
+    ctx.fillStyle = "#444";
+    editorRR(s.x, s.y - 3, s.w, 6, 3); ctx.fill();
+    const t = Math.max(0, Math.min(1, (lz.intervalMs - 500) / 3500));
+    ctx.fillStyle = "crimson";
+    editorRR(s.x, s.y - 3, s.w * t, 6, 3); ctx.fill();
+
+    ctx.fillStyle = "#999";
+    ctx.font = "10px Verdana";
+    ctx.textAlign = "center";
+    ["0.5s", "1.7s", "2.8s", "4.0s"].forEach((lbl, idx) => {
+        ctx.fillText(lbl, s.x + (s.w * idx) / 3, s.y + 26);
+    });
+    ctx.textAlign = "left";
+
+    ctx.fillStyle = "white";
+    ctx.beginPath(); ctx.arc(s.x + s.w * t, s.y, 11, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "crimson";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+}
+
+function setCannonInterval(ms) {
+    if (activeCannonIdx < 0 || !editorCannons[activeCannonIdx]) return;
+    const cn = editorCannons[activeCannonIdx];
+    ms = Math.max(300, Math.min(10000, Math.round(ms / 50) * 50));
+    cn.intervalMs = ms;
+    editorLastCannonInterval = ms;
+    renderEditor();
+}
+
+function setCannonIntervalFromX(mx) {
+    let s = editorMenuLayout && editorMenuLayout.slider;
+    if (!s) return;
+    let t = Math.max(0, Math.min(1, (mx - s.x) / s.w));
+    setCannonInterval(400 + Math.round((t * 3600) / 100) * 100);
+}
+
+function buildCannonPanel() {
+    const PX = 180, PY = 90, PW = 440, PH = 385;
+    editorMenuLayout = { panel: { x: PX, y: PY, w: PW, h: PH }, slider: { x: PX + 40, y: PY + 152, w: PW - 80 } };
+    const G = "menu";
+    pushCloseX(PX, PY, PW);
+
+    editorButtons.push({ x: PX + 20, y: PY + 64, w: 120, h: 40, action: "CN_DELETE", group: G, label: "DELETE CANNON", color: "crimson" });
+    editorButtons.push({ x: PX + 30, y: PY + 130, w: PW - 60, h: 44, action: "CN_SLIDER", group: G });
+
+    const steps = [
+        { label: "-0.5s", delta: -500 },
+        { label: "-0.1s", delta: -100 },
+        { label: "+0.1s", delta: 100 },
+        { label: "+0.5s", delta: 500 }
+    ];
+    steps.forEach((item, i) => {
+        editorButtons.push({
+            x: PX + 20 + i * 104, y: PY + 192, w: 96, h: 32,
+            action: "CN_STEP", delta: item.delta, group: G, label: item.label, color: "#444"
+        });
+    });
+
+    const presets = [
+        { label: "Fast 0.7s", value: 700 },
+        { label: "Med 1.3s",  value: 1300 },
+        { label: "Norm 2.0s", value: 2000 },
+        { label: "Slow 3.2s", value: 3200 }
+    ];
+    presets.forEach((item, i) => {
+        editorButtons.push({
+            x: PX + 20 + i * 104, y: PY + 238, w: 96, h: 32,
+            action: "CN_SET", value: item.value, group: G, label: item.label, color: "#5a4636"
+        });
+    });
+
+    editorButtons.push({ x: PX + 20,  y: PY + 284, w: 130, h: 32, action: "CN_ROTATE", group: G, label: "ROTATE DIR", color: "#444" });
+    editorButtons.push({ x: PX + 155, y: PY + 284, w: 130, h: 32, action: "CN_SPEED",  group: G, label: "PELLET SPD", color: "#444" });
+    editorButtons.push({ x: PX + 290, y: PY + 284, w: 130, h: 32, action: "CN_OFFSET", group: G, label: "DELAY +0.5s", color: "#444" });
+
+    editorButtons.push({ x: PX + 20, y: PY + 332, w: 200, h: 36, action: "CN_TYPE", group: G, label: "TYPE INTERVAL (ms)", color: "teal" });
+    editorButtons.push({ x: PX + PW - 120, y: PY + 332, w: 100, h: 36, action: "CLOSE_MENU", group: G, label: "DONE", color: "forestgreen" });
+}
+
+function drawCannonPanel() {
+    const cn = editorCannons[activeCannonIdx];
+    if (!cn) { editorPanel = null; renderEditor(); return; }
+    const dirNames = { D: "DOWN", R: "RIGHT", U: "UP", L: "LEFT" };
+    drawPanelFrame("CANNON #" + (activeCannonIdx + 1) + " (" + (dirNames[cn.dir] || cn.dir) + ")");
+    const p = editorMenuLayout.panel, s = editorMenuLayout.slider;
+    for (const b of editorButtons) {
+        if (b.group === "menu" && b.label) drawPanelBtn(b);
+}
+
+    const sec = (cn.intervalMs / 1000).toFixed(2) + "s";
+    const offSec = (cn.offsetMs / 1000).toFixed(2) + "s";
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "crimson";
+    ctx.font = "bold 28px Verdana";
+    ctx.fillText(sec + " cycle", p.x + 285, p.y + 92);
+    ctx.fillStyle = "#bbbbbb";
+    ctx.font = "11px Verdana";
+    ctx.fillText("Pellet Speed: " + cn.bulletSpeed + "  |  Delay: " + offSec, p.x + 285, p.y + 114);
+    ctx.textAlign = "left";
+
+    // Slider bar (0.4s to 4.0s)
+    ctx.fillStyle = "#444";
+    editorRR(s.x, s.y - 3, s.w, 6, 3); ctx.fill();
+    const t = Math.max(0, Math.min(1, (cn.intervalMs - 400) / 3600));
+    ctx.fillStyle = "crimson";
+    editorRR(s.x, s.y - 3, s.w * t, 6, 3); ctx.fill();
+
+    ctx.fillStyle = "#999";
+    ctx.font = "10px Verdana";
+    ctx.textAlign = "center";
+    ["0.4s", "1.6s", "2.8s", "4.0s"].forEach((lbl, idx) => {
+        ctx.fillText(lbl, s.x + (s.w * idx) / 3, s.y + 26);
+    });
+    ctx.textAlign = "left";
+
+    ctx.fillStyle = "white";
+    ctx.beginPath(); ctx.arc(s.x + s.w * t, s.y, 11, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "crimson";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+}
+
 function buildColorsPanel() {
     const PX = 90, PW = 620, CW = 88, CH = 78, GAP = 8, PH = 336, PY = 80;
     editorMenuLayout = { panel: { x: PX, y: PY, w: PW, h: PH } };
@@ -2600,7 +3207,7 @@ function openExportWorldPrompt(wi) {
     bytes.push(world.levels.length);
     for (const lv of world.levels) {
         pushTextBytes(bytes, lv.name || "");
-        const lvBytes = encodeLevelBytes(lv.grid, lv.theme, lv.speed, lv.tracks);
+        const lvBytes = encodeLevelBytes(lv.grid, lv.theme, lv.speed, lv.tracks, lv.lasers, lv.cannons);
         for (const b of lvBytes) bytes.push(b);
     }
     bytes.push(levelChecksum(bytes));
@@ -2634,6 +3241,8 @@ function buildEditorPanel() {
     else if (editorPanel === "colors") buildColorsPanel();
     else if (editorPanel === "levels") buildLevelsPanel();
 	else if (editorPanel === "track") buildTrackPanel();
+	else if (editorPanel === "laser") buildLaserPanel();
+	else if (editorPanel === "cannon") buildCannonPanel();
 }
 
 function drawPanelFrame(title) {
@@ -2736,8 +3345,8 @@ function drawColorsPanel() {
         ctx.fillStyle = "white";
         ctx.font = "9px Verdana";
         ctx.textAlign = "center";
-        ctx.fillText(th.bg, b.x + b.w / 2, b.y + b.h - 8);
-        ctx.fillText("W" + b.theme, b.x + 14, b.y + 47);
+        ctx.fillText(th.name, b.x + b.w / 2, b.y + b.h - 8);
+        ctx.fillText("W" + b.theme, b.x + 16, b.y + 47);
         ctx.textAlign = "left";
         if (hover) {
             ctx.fillStyle = "rgba(255,255,255,0.18)";
@@ -2750,8 +3359,8 @@ function drawColorsPanel() {
     }
     ctx.fillStyle = "#cccccc";
     ctx.font = "11px Verdana";
-    ctx.fillText(hovered ? "World " + hovered.theme + ": " + WORLD_THEMES[hovered.theme].bg + " background"
-                         : "Each color also sets the matching wall, door and player colors.",
+    ctx.fillText(hovered ? "World " + hovered.theme + ": " + WORLD_THEMES[hovered.theme].name
+                         : "Each theme sets the matching background, wall, door and player colors.",
                  p.x + 20, p.y + p.h - 14);
 }
 
@@ -2827,9 +3436,13 @@ function drawEditorPanel() {
     else if (editorPanel === "colors") drawColorsPanel();
     else if (editorPanel === "levels") drawLevelsPanel();
 	else if (editorPanel === "track") drawTrackPanel();
-
+	else if (editorPanel === "laser") drawLaserPanel();
+	else if (editorPanel === "cannon") drawCannonPanel();
 }
 
+// ------------------------------------------------------------
+//  Level setup / rendering
+// ------------------------------------------------------------
 function initBlankEditorGrid() {
     editorGrid = blankGridStrings().map(s => s.split(""));
 }
@@ -2928,6 +3541,50 @@ function renderEditor() {
 			});
 		}
     }
+	
+	for (let i = 0; i < editorLasers.length; i++) {
+		let lz = editorLasers[i];
+		let spawned = addLaser(lz.c, lz.r, lz.dir, lz.intervalMs, lz.activeMs, lz.offsetMs);
+		if (spawned) spawned.isActive = true;
+		if (activeCycleType === "laser" && i === activeLaserIdx) {
+			addEditorLayer(4.5, () => {
+				ctx.strokeStyle = "cyan";
+				ctx.lineWidth = 3;
+				ctx.strokeRect(lz.c * TILE_SIZE + 2, lz.r * TILE_SIZE + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+			});
+		}
+	}
+	
+	for (let i = 0; i < editorCannons.length; i++) {
+        let cn = editorCannons[i];
+        addCannon(cn.c, cn.r, cn.dir, cn.intervalMs, cn.bulletSpeed, cn.offsetMs);
+
+        // Draw a dotted sightline showing which way the cannon fires
+        let cx = cn.c * TILE_SIZE + TILE_SIZE / 2;
+        let cy = cn.r * TILE_SIZE + TILE_SIZE / 2;
+        let dc = cn.dir === "R" ? 1 : (cn.dir === "L" ? -1 : 0);
+        let dr = cn.dir === "D" ? 1 : (cn.dir === "U" ? -1 : 0);
+        addEditorLayer(3.5, () => {
+            ctx.save();
+            ctx.strokeStyle = "rgba(255, 80, 80, 0.45)";
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 6]);
+            ctx.beginPath();
+            ctx.moveTo(cx + dc * 12, cy + dr * 12);
+            ctx.lineTo(cx + dc * 70, cy + dr * 70);
+            ctx.stroke();
+            ctx.restore();
+        });
+
+        // Highlight the active cannon with a cyan border
+        if (activeCycleType === "cannon" && i === activeCannonIdx) {
+            addEditorLayer(4.5, () => {
+                ctx.strokeStyle = "cyan";
+                ctx.lineWidth = 3;
+                ctx.strokeRect(cn.c * TILE_SIZE + 2, cn.r * TILE_SIZE + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+            });
+        }
+    }
 
     // Position player marker accurately on the 'P' tile
     for (let r = 0; r < 15; r++) {
@@ -2982,10 +3639,15 @@ function renderEditor() {
         editorButtons.push({ x: x, y: 5, w: w, h: 26, action: action, group: "top" });
     }
 
+    const hasCycleObj = activeCycleType === "cannon"
+        ? (activeCannonIdx >= 0 && !!editorCannons[activeCannonIdx])
+        : (activeLaserIdx >= 0 && !!editorLasers[activeLaserIdx]);
+
     const topDefs = [
         ["LEVELS", 64, "slateblue", "OPEN_LEVELS"],
         ["COLORS", 64, "#9a5fd6", "OPEN_COLORS"],
-		["TRACK", 58, activeTrackIdx >= 0 ? "darkorange" : "#555", "OPEN_TRACK"],
+        ["CYCLE", 56, hasCycleObj ? "crimson" : "#555", "OPEN_LASER"],
+        ["TRACK", 58, activeTrackIdx >= 0 ? "darkorange" : "#555", "OPEN_TRACK"],
         ["WALL", 52, editorHazardSpeed > 0 ? "orangered" : "#555", "OPEN_HAZARD"],
         ["CLEAR", 54, "#555", "CLEAR_MAP"],
         ["EXPORT", 50, "teal", "CODE_MENU"],
@@ -3010,9 +3672,26 @@ function renderEditor() {
     }
 }
 
+// ------------------------------------------------------------
+//  Input
+// ------------------------------------------------------------
 function findTrackAt(c, r) {
     for (let i = editorTracks.length - 1; i >= 0; i--) {
         if (editorTracks[i].points.some(p => p.c === c && p.r === r)) return i;
+    }
+    return -1;
+}
+
+function findLaserAt(c, r) {
+    for (let i = editorLasers.length - 1; i >= 0; i--) {
+        if (editorLasers[i].c === c && editorLasers[i].r === r) return i;
+    }
+    return -1;
+}
+
+function findCannonAt(c, r) {
+    for (let i = editorCannons.length - 1; i >= 0; i--) {
+        if (editorCannons[i].c === c && editorCannons[i].r === r) return i;
     }
     return -1;
 }
@@ -3057,9 +3736,81 @@ function paintTileAt(mx, my, isInitialClick) {
         }
         return;
     }
-
+	
+	// Laser Emitter ("*"): click empty tile to place; click existing laser to select & rotate
+    if (selectedTool === "*") {
+        if (isInitialClick) {
+            const hitIdx = findLaserAt(c, r);
+            if (hitIdx >= 0) {
+                activeLaserIdx = hitIdx;
+				activeCycleType = "laser";
+                const dirs = ["D", "R", "U", "L"];
+                const cur = dirs.indexOf(editorLasers[hitIdx].dir);
+                editorLasers[hitIdx].dir = dirs[(cur + 1) % 4];
+                renderEditor();
+                return;
+            }
+            editorLasers.push({
+                c: c,
+                r: r,
+                dir: "D",
+                intervalMs: editorLastLaserInterval,
+                activeMs: Math.round(editorLastLaserInterval * 0.45),
+                offsetMs: 0
+            });
+            activeLaserIdx = editorLasers.length - 1;
+			activeCycleType = "laser";
+            renderEditor();
+        }
+        return;
+    }
+	
+	if (selectedTool === "B") {
+		if (isInitialClick) {
+			const hitIdx = findCannonAt(c, r);
+			if (hitIdx >= 0) {
+				activeCannonIdx = hitIdx;
+				activeCycleType = "cannon";
+				const dirs = ["D", "R", "U", "L"];
+				editorCannons[hitIdx].dir = dirs[(dirs.indexOf(editorCannons[hitIdx].dir) + 1) % 4];
+				renderEditor();
+				return;
+			}
+			editorCannons.push({
+				c, r, dir: "D",
+				intervalMs: editorLastCannonInterval,
+				bulletSpeed: 4.0,
+				offsetMs: 0
+			});
+			activeCannonIdx = editorCannons.length - 1;
+			activeCycleType = "cannon";
+			renderEditor();
+		}
+		return;
+	}
+	
     // 2. Eraser removes a track if one is under the cursor
     if (selectedTool === ".") {
+        const lzIdx = findLaserAt(c, r);
+        if (lzIdx >= 0) {
+            editorLasers.splice(lzIdx, 1);
+            activeLaserIdx = editorLasers.length > 0 ? Math.min(activeLaserIdx, editorLasers.length - 1) : -1;
+            if (activeCycleType === "laser" && activeLaserIdx < 0) {
+                activeCycleType = activeCannonIdx >= 0 ? "cannon" : null;
+            }
+            renderEditor();
+            return;
+        }
+        const cnIdx = findCannonAt(c, r);
+        if (cnIdx >= 0) {
+            editorCannons.splice(cnIdx, 1);
+            activeCannonIdx = editorCannons.length > 0 ? Math.min(activeCannonIdx, editorCannons.length - 1) : -1;
+            if (activeCycleType === "cannon" && activeCannonIdx < 0) {
+                activeCycleType = activeLaserIdx >= 0 ? "laser" : null;
+            }
+            renderEditor();
+            return;
+        }
         const hitIdx = findTrackAt(c, r);
         if (hitIdx >= 0) {
             editorTracks.splice(hitIdx, 1);
@@ -3102,10 +3853,11 @@ function handleEditorClick(mx, my) {
             }
             return;
         }
-		paintTileAt(mx, my, true);
         if (GAME_STATE === "EDITOR") commitEditorLevel();
         return;
     }
+
+    const beforeClickSnap = createEditorSnapshot();
 
     const world = customWorlds[activeWorldIdx];
     switch (b.action) {
@@ -3134,6 +3886,8 @@ function handleEditorClick(mx, my) {
             askConfirm("Clear this level?", "Every object in this level will be removed.", () => {
                 initBlankEditorGrid();
 				editorTracks = []; activeTrackIdx = -1;
+				editorLasers = []; activeLaserIdx = -1;
+				editorCannons = []; activeCannonIdx = -1; activeCycleType = null;
                 renderEditor();
                 commitEditorLevel();
             }, "CLEAR");
@@ -3211,6 +3965,116 @@ function handleEditorClick(mx, my) {
             editorPanel = "track";
             renderEditor();
             break;
+		case "OPEN_LASER":
+            if (activeCycleType === "cannon" && activeCannonIdx >= 0 && editorCannons[activeCannonIdx]) {
+                editorPanel = "cannon";
+                renderEditor();
+                break;
+            }
+            if (activeLaserIdx >= 0 && editorLasers[activeLaserIdx]) {
+                activeCycleType = "laser";
+                editorPanel = "laser";
+                renderEditor();
+                break;
+            }
+            if (activeCannonIdx >= 0 && editorCannons[activeCannonIdx]) {
+                activeCycleType = "cannon";
+                editorPanel = "cannon";
+                renderEditor();
+                break;
+            }
+            showMessage("No laser or cannon", "Select Laser or Cannon from ALL objects and click a tile to place one first.");
+            break;
+        case "LZ_SLIDER": setLaserIntervalFromX(mx); break;
+        case "LZ_STEP":   setLaserInterval((editorLasers[activeLaserIdx]?.intervalMs || 2000) + b.delta); break;
+        case "LZ_SET":    setLaserInterval(b.value); break;
+        case "LZ_ROTATE": {
+            const lz = editorLasers[activeLaserIdx];
+            if (lz) {
+                const dirs = ["D", "R", "U", "L"];
+                lz.dir = dirs[(dirs.indexOf(lz.dir) + 1) % 4];
+                renderEditor();
+            }
+            break;
+        }
+        case "LZ_DUTY": {
+            const lz = editorLasers[activeLaserIdx];
+            if (lz) {
+                const pct = lz.activeMs / lz.intervalMs;
+                const nextPct = pct < 0.35 ? 0.45 : (pct < 0.55 ? 0.65 : 0.25);
+                lz.activeMs = Math.max(150, Math.min(lz.intervalMs - 150, Math.round(lz.intervalMs * nextPct)));
+                renderEditor();
+            }
+            break;
+        }
+        case "LZ_OFFSET": {
+            const lz = editorLasers[activeLaserIdx];
+            if (lz) {
+                lz.offsetMs = (lz.offsetMs + 500) % lz.intervalMs;
+                renderEditor();
+            }
+            break;
+        }
+        case "LZ_TYPE":
+            askText("Laser cycle interval (ms)", String(editorLasers[activeLaserIdx]?.intervalMs || 2000), (input) => {
+                let v = parseInt(input);
+                if (isFinite(v) && v >= 400) setLaserInterval(v);
+            }, { maxLen: 5, filter: /[0-9]/, hint: "Milliseconds per full on/off cycle (e.g. 800 = fast, 2000 = normal)." });
+            break;
+        case "LZ_DELETE":
+            if (activeLaserIdx >= 0) {
+                editorLasers.splice(activeLaserIdx, 1);
+                activeLaserIdx = editorLasers.length > 0 ? 0 : -1;
+                if (activeLaserIdx < 0) activeCycleType = activeCannonIdx >= 0 ? "cannon" : null;
+            }
+            editorPanel = null;
+            renderEditor();
+            break;
+        case "CN_SLIDER": setCannonIntervalFromX(mx); break;
+        case "CN_STEP":   setCannonInterval((editorCannons[activeCannonIdx]?.intervalMs || 1500) + b.delta); break;
+        case "CN_SET":    setCannonInterval(b.value); break;
+        case "CN_ROTATE": {
+            const cn = editorCannons[activeCannonIdx];
+            if (cn) {
+                const dirs = ["D", "R", "U", "L"];
+                cn.dir = dirs[(dirs.indexOf(cn.dir) + 1) % 4];
+                renderEditor();
+            }
+            break;
+        }
+        case "CN_SPEED": {
+            const cn = editorCannons[activeCannonIdx];
+            if (cn) {
+                const speeds = [3.0, 4.0, 5.5, 7.5];
+                const idx = speeds.findIndex(s => Math.abs(s - cn.bulletSpeed) < 0.2);
+                cn.bulletSpeed = speeds[(idx + 1) % speeds.length];
+                renderEditor();
+            }
+            break;
+        }
+        case "CN_OFFSET": {
+            const cn = editorCannons[activeCannonIdx];
+            if (cn) {
+                cn.offsetMs = (cn.offsetMs + 500) % cn.intervalMs;
+                renderEditor();
+            }
+            break;
+        }
+        case "CN_TYPE":
+            askText("Cannon fire interval (ms)", String(editorCannons[activeCannonIdx]?.intervalMs || 1500), (input) => {
+                let v = parseInt(input);
+                if (isFinite(v) && v >= 300) setCannonInterval(v);
+            }, { maxLen: 5, filter: /[0-9]/, hint: "Milliseconds between shots (e.g. 700 = fast, 1500 = normal)." });
+            break;
+        case "CN_DELETE":
+            if (activeCannonIdx >= 0) {
+                editorCannons.splice(activeCannonIdx, 1);
+                activeCannonIdx = editorCannons.length > 0 ? 0 : -1;
+                if (activeCannonIdx < 0) activeCycleType = activeLaserIdx >= 0 ? "laser" : null;
+            }
+            editorPanel = null;
+            renderEditor();
+            break;
         case "TR_SLIDER": setTrackSpeedFromX(mx); break;
         case "TR_STEP":   setTrackSpeed((editorTracks[activeTrackIdx]?.speed || 2.0) + b.delta); break;
         case "TR_SET":    setTrackSpeed(b.value); break;
@@ -3233,6 +4097,21 @@ function handleEditorClick(mx, my) {
 }
 
 function handleEditorKey(e) {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+        let k = e.key.toLowerCase();
+        if (k === "z") {
+            e.preventDefault();
+            if (e.shiftKey) redoEditor(); // Supports Ctrl+Shift+Z too
+            else undoEditor();
+            return;
+        }
+        if (k === "r" || k === "y") {
+            e.preventDefault();
+            redoEditor();
+            return;
+        }
+    }
+
     if (e.key === "Escape") {
         if (editorPanel) {
             editorPanel = null;
@@ -3269,10 +4148,29 @@ canvas.addEventListener("mousedown", (e) => {
         }
         return;
     }
+	if (editorPanel === "laser") {
+        const l = editorButtons.find(btn => btn.action === "LZ_SLIDER" && editorHit(btn, pos.x, pos.y));
+        if (l) {
+            editorSliderDrag = true;
+            setLaserIntervalFromX(pos.x);
+        }
+        return;
+    }
+	if (editorPanel === "cannon") {
+        const cn = editorButtons.find(btn => btn.action === "CN_SLIDER" && editorHit(btn, pos.x, pos.y));
+        if (cn) {
+            editorSliderDrag = true;
+            setCannonIntervalFromX(pos.x);
+        }
+        return;
+    }
     // Only start a paint-drag if the press began on the grid (not on a button or a panel)
     isMouseDown = !editorPanel &&
         pos.y >= EDITOR_TOP_H && pos.y <= getHeight() - EDITOR_BOTTOM_H;
-	if (isMouseDown) paintTileAt(pos.x, pos.y, true);
+	if (isMouseDown) {
+		pendingSnapshot = createEditorSnapshot();
+		paintTileAt(pos.x, pos.y, true);
+	}
 });
 
 canvas.addEventListener("mousemove", (e) => {
@@ -3283,7 +4181,12 @@ canvas.addEventListener("mousemove", (e) => {
     const pos = editorCanvasPos(e);
     editorMouse.x = pos.x;
     editorMouse.y = pos.y;
-    if (editorSliderDrag) editorPanel === "track" ? setTrackSpeedFromX(pos.x) : setHazardFromX(pos.x);
+    if (editorSliderDrag) {
+        if (editorPanel === "track") setTrackSpeedFromX(pos.x);
+        else if (editorPanel === "laser") setLaserIntervalFromX(pos.x);
+        else if (editorPanel === "cannon") setCannonIntervalFromX(pos.x);
+        else setHazardFromX(pos.x);
+    }
     if (isMouseDown) paintTileAt(pos.x, pos.y, false);
 
     const onButton = activeEditorButtons().some(btn => editorHit(btn, pos.x, pos.y));
@@ -3298,9 +4201,15 @@ canvas.addEventListener("mouseleave", () => {
 window.addEventListener("mouseup", () => {
     isMouseDown = false;
     editorSliderDrag = false;
-	editorTracks = editorTracks.filter(t => t.points.length >= 2); 
-	activeTrackIdx = Math.min(activeTrackIdx, editorTracks.length - 1);
-    if (GAME_STATE === "EDITOR") commitEditorLevel();
+    editorTracks = editorTracks.filter(t => t.points.length >= 2); 
+    activeTrackIdx = Math.min(activeTrackIdx, editorTracks.length - 1);
+    if (GAME_STATE === "EDITOR") {
+        if (pendingSnapshot && pendingSnapshot !== createEditorSnapshot()) {
+            pushUndoSnapshot(pendingSnapshot);
+        }
+        pendingSnapshot = null;
+        commitEditorLevel();
+    }
 });
 
 const LEVEL_CODE_PREFIX = "CD2";
@@ -3346,7 +4255,9 @@ function levelChecksum(bytes) {
     return c;
 }
 
-function encodeLevelBytes(gridRows, theme, hazardSpeed, tracks) {
+const LASER_DIRS = ["D", "R", "U", "L"];
+
+function encodeLevelBytes(gridRows, theme, hazardSpeed, tracks, lasersList, cannonsList) {
     const flat = gridRows.join("");
     const idx = [];
     for (const ch of flat) {
@@ -3368,7 +4279,7 @@ function encodeLevelBytes(gridRows, theme, hazardSpeed, tracks) {
     const speed = Math.max(0, Math.min(9900, Math.round(hazardSpeed * 100)));
     const out = [useRle ? 1 : 0, theme, speed >> 8, speed & 255].concat(useRle ? rle : packed);
 
-    // Append moving tracks (1 byte count + per track: type, speed*100 (2B), pointCount, 2B per (c, r))
+    // 1. Moving tracks
     const validTracks = sanitizeTracks(tracks);
     out.push(validTracks.length);
     for (const tr of validTracks) {
@@ -3379,6 +4290,25 @@ function encodeLevelBytes(gridRows, theme, hazardSpeed, tracks) {
         for (const pt of tr.points) {
             out.push(pt.c, pt.r);
         }
+    }
+
+    // 2. Pulsing lasers (1B count + per laser: c, r, dirIdx, intervalMs (2B), activeMs (2B), offsetMs (2B))
+    const validLasers = sanitizeLasers(lasersList);
+    out.push(validLasers.length);
+    for (const lz of validLasers) {
+        out.push(lz.c, lz.r, Math.max(0, LASER_DIRS.indexOf(lz.dir)));
+        out.push((lz.intervalMs >> 8) & 255, lz.intervalMs & 255);
+        out.push((lz.activeMs >> 8) & 255, lz.activeMs & 255);
+        out.push((lz.offsetMs >> 8) & 255, lz.offsetMs & 255);
+    }
+	const validCannons = sanitizeCannons(cannonsList);
+    out.push(validCannons.length);
+    for (const cn of validCannons) {
+        out.push(cn.c, cn.r, Math.max(0, LASER_DIRS.indexOf(cn.dir)));
+        out.push((cn.intervalMs >> 8) & 255, cn.intervalMs & 255);
+        const bSpd = Math.max(100, Math.min(1500, Math.round(cn.bulletSpeed * 100)));
+        out.push((bSpd >> 8) & 255, bSpd & 255);
+        out.push((cn.offsetMs >> 8) & 255, cn.offsetMs & 255);
     }
     return out;
 }
@@ -3406,6 +4336,8 @@ function decodeLevelBytes(bytes, offset) {
     for (let r = 0; r < 15; r++) {
         grid.push(flat.slice(r * 20, (r + 1) * 20));
     }
+
+    // 1. Read tracks
     const tracks = [];
     if (pos < bytes.length) {
         const trackCount = bytes[pos++];
@@ -3423,7 +4355,37 @@ function decodeLevelBytes(bytes, offset) {
             tracks.push({ type: tType, speed: tSpd, points: pts });
         }
     }
-    return { theme, speed, grid, tracks, nextOffset: pos };
+
+    // 2. Read lasers (optional for older codes)
+    const lasersOut = [];
+    if (pos < bytes.length) {
+        const laserCount = bytes[pos++];
+        for (let l = 0; l < laserCount; l++) {
+            if (pos + 9 > bytes.length) return null;
+            const c = bytes[pos++];
+            const r = bytes[pos++];
+            const dir = LASER_DIRS[bytes[pos++]] || "D";
+            const intervalMs = (bytes[pos] << 8) | bytes[pos + 1]; pos += 2;
+            const activeMs = (bytes[pos] << 8) | bytes[pos + 1]; pos += 2;
+            const offsetMs = (bytes[pos] << 8) | bytes[pos + 1]; pos += 2;
+            lasersOut.push({ c, r, dir, intervalMs, activeMs, offsetMs });
+        }
+    }
+	const cannonsOut = [];
+	if (pos < bytes.length) {
+		const cannonCount = bytes[pos++];
+		for (let i = 0; i < cannonCount; i++) {
+			if (pos + 9 > bytes.length) return null;
+			const c = bytes[pos++];
+			const r = bytes[pos++];
+			const dir = LASER_DIRS[bytes[pos++]] || "D";
+			const intervalMs = (bytes[pos] << 8) | bytes[pos + 1]; pos += 2;
+			const bulletSpeed = ((bytes[pos] << 8) | bytes[pos + 1]) / 100; pos += 2;
+			const offsetMs = (bytes[pos] << 8) | bytes[pos + 1]; pos += 2;
+			cannonsOut.push({ c, r, dir, intervalMs, bulletSpeed, offsetMs });
+		}
+	}
+    return { theme, speed, grid, tracks, lasers: lasersOut, cannons: cannonsOut, nextOffset: pos };
 }
 
 function pushTextBytes(arr, str) {
@@ -3445,8 +4407,7 @@ function exportWorldCode() {
     commitEditorLevel();
     const world = customWorlds[activeWorldIdx];
     if (!world) {
-        // Fallback if somehow outside a world
-        const bytes = encodeLevelBytes(editorGrid.map(r => r.join("")), editorTheme, editorHazardSpeed);
+        const bytes = encodeLevelBytes(editorGrid.map(r => r.join("")), editorTheme, editorHazardSpeed, editorTracks, editorLasers, editorCannons);
         bytes.push(levelChecksum(bytes));
         return LEVEL_CODE_PREFIX + bytesToB64(bytes);
     }
@@ -3457,7 +4418,7 @@ function exportWorldCode() {
 
     for (const lv of world.levels) {
         pushTextBytes(bytes, lv.name || "");
-        const lvBytes = encodeLevelBytes(lv.grid, lv.theme, lv.speed, lv.tracks);
+        const lvBytes = encodeLevelBytes(lv.grid, lv.theme, lv.speed, lv.tracks, lv.lasers, lv.cannons);
         for (const b of lvBytes) bytes.push(b);
     }
 
@@ -3499,7 +4460,9 @@ function importLevelCode(code) {
                 grid: lvData.grid,
                 theme: lvData.theme,
                 speed: lvData.speed,
-				tracks: lvData.tracks || []
+				tracks: lvData.tracks || [],
+				lasers: lvData.lasers || [],
+				cannons: lvData.cannons || []
             });
         }
 
@@ -3523,6 +4486,7 @@ function importLevelCode(code) {
         theme = Math.max(1, Math.min(TOTAL_WORLDS, parseInt(parts[1]) || 1));
         speed = Math.max(0, parseFloat(parts[2]) || 0);
         grid = [];
+		editorTracks = []; activeTrackIdx = -1; editorLasers = []; activeLaserIdx = -1; editorCannons = []; activeCannonIdx = -1; activeCycleType = null;
         for (let r = 0; r < 15; r++) grid.push(parts[3].slice(r * 20, (r + 1) * 20));
     } else if (code.indexOf(LEVEL_CODE_PREFIX) === 0) {
         const bytes = b64ToBytes(code.slice(LEVEL_CODE_PREFIX.length));
@@ -3536,6 +4500,11 @@ function importLevelCode(code) {
         grid = decoded.grid;
         editorTracks = decoded.tracks || [];
         activeTrackIdx = editorTracks.length > 0 ? 0 : -1;
+		editorLasers = sanitizeLasers(decoded.lasers);
+		activeLaserIdx = editorLasers.length > 0 ? 0 : -1;
+		editorCannons = sanitizeCannons(decoded.cannons);
+		activeCannonIdx = editorCannons.length > 0 ? 0 : -1;
+		activeCycleType = activeCannonIdx >= 0 ? "cannon" : (activeLaserIdx >= 0 ? "laser" : null);
     } else {
         return bad("boi that litterally isn't even a valid code.");
     }
@@ -3615,11 +4584,11 @@ function currentCustomData() {
     if (customRun.mode === "world") {
         let w = customWorlds[customRun.worldIdx];
         let lv = w && w.levels[customRun.levelIdx];
-        if (lv) return { name: lv.name, grid: lv.grid, theme: lv.theme, speed: lv.speed, tracks: lv.tracks || [], count: w.levels.length };
+        if (lv) return { name: lv.name, grid: lv.grid, theme: lv.theme, speed: lv.speed, tracks: lv.tracks || [], lasers: lv.lasers || [], cannons: lv.cannons || [], count: w.levels.length };
     }
     let w = customWorlds[activeWorldIdx];
     let lv = w && w.levels[activeLevelIdx];
-    return { name: lv ? lv.name : "", grid: editorGrid.map(r => r.join("")), theme: editorTheme, speed: editorHazardSpeed, tracks: sanitizeTracks(editorTracks), count: 1 };
+    return { name: lv ? lv.name : "", grid: editorGrid.map(r => r.join("")), theme: editorTheme, speed: editorHazardSpeed, tracks: sanitizeTracks(editorTracks), lasers: sanitizeLasers(editorLasers), cannons: sanitizeCannons(editorCannons), count: 1 };
 }
 
 function playCustomLevel(opts) {
@@ -3688,6 +4657,16 @@ function playCustomLevel(opts) {
             addTrackObstacle(tr.type, tr.points, tr.speed);
         }
     }
+	if (Array.isArray(data.lasers)) {
+		for (const lz of data.lasers) {
+			addLaser(lz.c, lz.r, lz.dir, lz.intervalMs, lz.activeMs, lz.offsetMs);
+		}
+	}
+	if (Array.isArray(data.cannons)) {
+		for (const cn of data.cannons) {
+			addCannon(cn.c, cn.r, cn.dir, cn.intervalMs, cn.bulletSpeed, cn.offsetMs);
+		}
+	}
     let label = "";
     if (customRun.mode === "world") {
         label = data.name ? data.name : ("L " + (customRun.levelIdx + 1) + "/" + data.count);
@@ -5221,6 +6200,563 @@ function W7L9() {
     addTrackObstacle("C", [{ c: 3, r: 12 }, { c: 8, r: 12 }, { c: 8, r: 9 }], 3.0);
     addTrackObstacle("C", [{ c: 16, r: 12 }, { c: 11, r: 12 }, { c: 11, r: 9 }], 3.0);
     levelText.setText("7-F");
+}
+
+function W8L1() {
+    let map = [
+        "####################",
+        "#..................#",
+        "#..................#",
+        "#..................#",
+        "#..................#",
+        "#..................#",
+        "#..................#",
+        "#P.................D",
+        "#..................#",
+        "#..................#",
+        "#..................#",
+        "#..................#",
+        "#..................#",
+        "#..................#",
+        "####################",
+    ];
+    loadMap(map);
+    addLaser(4, 1, "D", 2000, 900, 0);
+    addLaser(7, 1, "D", 2000, 900, 500);
+    addLaser(10, 1, "D", 2000, 900, 1000);
+    addLaser(13, 1, "D", 2000, 900, 1500);
+    addLaser(16, 1, "D", 2000, 900, 0);
+    levelText.setText("8-1");
+}
+
+function W8L2() {
+    let map = [
+        "####################",
+        "#....X...XX...X....#",
+        "######...XX...######",
+        "#...##...XX...##...#",
+        "#....X...XX...X....#",
+        "#....X...XX...X....#",
+        "#....X...XX...X....#",
+        "#P...X...XX...X....D",
+        "#....X...XX...X....#",
+        "#....X...XX...X....#",
+        "#....X...XX...X....#",
+        "#...##...XX...##...#",
+        "######...XX...######",
+        "#H...X...XX...X....#",
+        "####################",
+    ];
+    loadMap(map);
+    addLaser(6, 1, "D", 2200, 950, 0);
+    addLaser(13, 13, "U", 2200, 950, 0);
+    addLaser(1, 5, "R", 2200, 950, 1100);
+    addLaser(18, 9, "L", 2200, 950, 1100);
+    levelText.setText("8-2");
+}
+
+function W8L3() {
+    let map = [
+        "####################",
+        "#H......#..........#",
+        "####.#..#.....#...S#",
+        "#..#.#.##.....#.####",
+        "#..#...#.........#.#",
+        "#......####......#.#",
+        "#........X.......#.#",
+        "#P.......X.......#.D",
+        "#........X.......#.#",
+        "#......####......#.#",
+        "###....#.........#.#",
+        "#.#..#.##.....#.##.#",
+        "#.##.#..#.....#....#",
+        "#.......#..........#",
+        "####################",
+    ];
+    loadMap(map);
+    addTrackObstacle("C", [{ c: 6, r: 2 }, { c: 6, r: 12 }], 2.4);
+    addTrackObstacle("C", [{ c: 13, r: 12 }, { c: 13, r: 2 }], 2.4);
+    addTrackObstacle("C", [{ c: 3, r: 7 }, { c: 4, r: 7 }, { c: 5, r: 7 }, { c: 6, r: 7 }, { c: 7, r: 7 }, { c: 8, r: 7 }, { c: 9, r: 7 }, { c: 10, r: 7 }, { c: 11, r: 7 }, { c: 12, r: 7 }, { c: 13, r: 7 }, { c: 14, r: 7 }, { c: 15, r: 7 }, { c: 16, r: 7 }], 2.0);
+    addLaser(4, 1, "D", 1600, 800, 0);
+    addLaser(15, 13, "U", 1600, 720, 1500);
+    addLaser(11, 13, "U", 1600, 720, 500);
+    levelText.setText("8-3");
+}
+
+function W8L4() {
+    let map = [
+        "####################",
+        "#...#..#..C....#...#",
+        "#...#..#T..C...#...#",
+        "#..##..######..###.#",
+        "#..#...#..C.#...C..#",
+        "#..#...#.C..#...##.#",
+        "#..#...#.##.#...#..#",
+        "#P.#...#.##.#...#.LD",
+        "#..#...#.##.#...####",
+        "#..#.....##......#.#",
+        "#..#.....##......#.#",
+        "#..##..######..###.#",
+        "#......#.......#...#",
+        "#......#K......#...#",
+        "####################",
+    ];
+    loadMap(map);
+    addLaser(5, 1, "D", 2600, 1171, 0);
+    addLaser(14, 1, "D", 2600, 1171, 25);
+    addLaser(6, 13, "U", 2600, 1171, 500);
+    addLaser(13, 13, "U", 2600, 1171, 500);
+    levelText.setText("8-4");
+}
+
+function W8L5() {
+    let map = [
+        "####################",
+        "#..K....#..#....F..#",
+        "#.......#.C#.......#",
+        "#.......#C.#.......#",
+        "####.####..####.####",
+        "#.............#....#",
+        "#.............#....#",
+        "#P............#...LD",
+        "#.............#....#",
+        "#.............#....#",
+        "####.####..####X####",
+        "#.......#C.#.......#",
+        "#..H....#.C#.......#",
+        "#.......#..X.......#",
+        "####################",
+    ];
+    loadMap(map);
+    addTrackObstacle("X", [{ c: 6, r: 5 }, { c: 13, r: 5 }, { c: 13, r: 9 }, { c: 6, r: 9 }], 2.6);
+    addTrackObstacle("C", [{ c: 6, r: 6 }, { c: 7, r: 6 }, { c: 8, r: 6 }, { c: 9, r: 6 }, { c: 10, r: 6 }, { c: 11, r: 6 }, { c: 12, r: 6 }, { c: 12, r: 7 }, { c: 12, r: 8 }, { c: 11, r: 8 }, { c: 10, r: 8 }, { c: 9, r: 8 }, { c: 8, r: 8 }, { c: 7, r: 8 }, { c: 6, r: 8 }], 2.0);
+    addTrackObstacle("C", [{ c: 4, r: 7 }, { c: 5, r: 7 }, { c: 6, r: 7 }, { c: 7, r: 7 }, { c: 8, r: 7 }, { c: 9, r: 7 }, { c: 10, r: 7 }, { c: 11, r: 7 }, { c: 12, r: 7 }, { c: 13, r: 7 }, { c: 14, r: 7 }, { c: 15, r: 7 }], 2.5);
+    addLaser(1, 2, "R", 1800, 750, 0);
+    addLaser(18, 2, "L", 1800, 750, 900);
+    addLaser(1, 12, "R", 1800, 750, 900);
+    addLaser(16, 4, "D", 1500, 650, 0);
+    addLaser(3, 4, "D", 1500, 675, 0);
+    addLaser(7, 3, "L", 1500, 675, 0);
+    addLaser(12, 3, "R", 1500, 675, 0);
+    addLaser(18, 12, "L", 1500, 675, 500);
+    levelText.setText("8-5");
+}
+
+function W8L6() {
+    let map = [
+        "####################",
+        "#..................#",
+        "#...##.H...#X####..#",
+        "#....#.....#....#..#",
+        "######.##XX#....#XX#",
+        "#...X#.#.XX#.#X##..#",
+        "#...X###.....#..#..#",
+        "#P..XXX#....##..#..D",
+        "#.#######....#..#..#",
+        "#.#XX..X###..#..#..#",
+        "#.##...X..####..#XX#",
+        "#..##..#.....#.##..#",
+        "#...##.#.....X.#...#",
+        "#......#.....X.#..T#",
+        "####################",
+    ];
+    loadMap(map);
+    addHazardWall(0.35);
+    addLaser(10, 1, "D", 2200, 600, 500);
+    addLaser(14, 13, "U", 2000, 800, 1000);
+    addLaser(17, 1, "D", 1400, 550, 0);
+    levelText.setText("8-6");
+}
+
+function W8L7() {
+    let map = [
+        "####################",
+        "#..................#",
+        "#..###........###..#",
+        "#..#............#..#",
+        "#..X....XXXX....X..#",
+        "#..X....X..X....X..#",
+        "#..X....X..X....X..#",
+        "#P.XC...X.HX...CX..D",
+        "#..X....X..X....X..#",
+        "#..X....X..X....X..#",
+        "#..X....XXXX....X..#",
+        "#..#............#..#",
+        "#..###........###..#",
+        "#..................#",
+        "####################",
+    ];
+    loadMap(map);
+    addTrackObstacle("X", [{ c: 2, r: 1 }, { c: 17, r: 1 }, { c: 17, r: 13 }, { c: 2, r: 13 }], 3.0);
+    addTrackObstacle("X", [{ c: 17, r: 13 }, { c: 2, r: 13 }, { c: 2, r: 1 }, { c: 17, r: 1 }, { c: 16, r: 1 }, { c: 15, r: 1 }, { c: 14, r: 1 }, { c: 13, r: 1 }, { c: 12, r: 1 }, { c: 11, r: 1 }, { c: 10, r: 1 }, { c: 9, r: 1 }, { c: 8, r: 1 }, { c: 7, r: 1 }, { c: 6, r: 1 }, { c: 5, r: 1 }, { c: 4, r: 1 }, { c: 3, r: 1 }, { c: 2, r: 1 }, { c: 2, r: 2 }, { c: 2, r: 3 }, { c: 2, r: 4 }, { c: 2, r: 5 }, { c: 2, r: 6 }, { c: 2, r: 7 }, { c: 2, r: 8 }, { c: 2, r: 9 }, { c: 2, r: 10 }, { c: 2, r: 11 }, { c: 2, r: 12 }, { c: 2, r: 13 }, { c: 3, r: 13 }, { c: 4, r: 13 }, { c: 5, r: 13 }, { c: 6, r: 13 }, { c: 7, r: 13 }, { c: 8, r: 13 }, { c: 9, r: 13 }, { c: 10, r: 13 }, { c: 11, r: 13 }, { c: 12, r: 13 }, { c: 13, r: 13 }, { c: 14, r: 13 }, { c: 15, r: 13 }, { c: 16, r: 13 }, { c: 17, r: 13 }, { c: 17, r: 12 }, { c: 17, r: 11 }, { c: 17, r: 10 }, { c: 17, r: 9 }, { c: 17, r: 8 }, { c: 17, r: 7 }, { c: 17, r: 6 }, { c: 17, r: 5 }, { c: 17, r: 4 }, { c: 17, r: 3 }, { c: 17, r: 2 }, { c: 17, r: 1 }], 3.0);
+    addLaser(9, 1, "D", 1600, 700, 0);
+    addLaser(10, 13, "U", 1600, 700, 800);
+    addLaser(1, 4, "R", 2000, 800, 400);
+    addLaser(18, 10, "L", 2000, 800, 1400);
+    levelText.setText("8-7");
+}
+
+function W8L8() {
+    let map = [
+        "####################",
+        "#K.......#..X......#",
+        "#........#..X......#",
+        "###.######..######.#",
+        "#........#..X....X.#",
+        "#........L..X....X.#",
+        "#........#..X....X.#",
+        "#P.......#..X....XLD",
+        "#........#..X....X.#",
+        "#........L..X....X.#",
+        "#........#..X....X.#",
+        "#######.##..######.#",
+        "#........#..X......#",
+        "#F.......#..X.....F#",
+        "####################",
+    ];
+    loadMap(map);
+    addTrackObstacle("C", [{ c: 5, r: 4 }, { c: 5, r: 10 }], 2.8);
+    addTrackObstacle("C", [{ c: 14, r: 10 }, { c: 14, r: 4 }], 3.2);
+    addTrackObstacle("X", [{ c: 4, r: 6 }, { c: 5, r: 6 }, { c: 6, r: 6 }], 3.0);
+    addTrackObstacle("X", [{ c: 6, r: 8 }, { c: 5, r: 8 }, { c: 4, r: 8 }], 3.0);
+    addLaser(3, 1, "D", 1500, 600, 0);
+    addLaser(7, 13, "U", 1200, 480, 600);
+    addLaser(11, 1, "D", 1100, 450, 300);
+    addLaser(16, 13, "U", 1100, 450, 850);
+    addLaser(18, 6, "L", 1100, 495, 0);
+    addLaser(18, 8, "L", 1100, 495, 500);
+    levelText.setText("8-8");
+}
+
+function W8L9() {
+    let map = [
+        "XXXXXXXXXXXXXXXXXXXX",
+        "X..F..#......#..K..X",
+        "X.....#......#.....X",
+        "X..##.#XXXXXX#.##..X",
+        "X..................X",
+        "X..................X",
+        "X.....###..###.....X",
+        "XP....#H....T#....LD",
+        "X.....###..###.....X",
+        "X..................X",
+        "X..................X",
+        "X..##.#XXXXXX#.##..X",
+        "X....S#......#.....X",
+        "X..F..#......#..F..X",
+        "XXXXXXXXXXXXXXXXXXXX",
+    ];
+    loadMap(map);
+    addHazardWall(0.4);
+	addTrackObstacle("C", [{ c: 3, r: 2 }, { c: 8, r: 2 }, { c: 8, r: 5 }], 2.8);
+	addTrackObstacle("C", [{ c: 16, r: 2 }, { c: 11, r: 2 }, { c: 11, r: 5 }], 2.8);
+	addTrackObstacle("X", [{ c: 16, r: 4 }, { c: 16, r: 10 }], 3.2);
+	addLaser(5, 1, "D", 1400, 550, 0);
+	addLaser(14, 1, "D", 1400, 550, 700);
+	addLaser(1, 4, "R", 1600, 600, 400);
+	addLaser(18, 10, "L", 1600, 600, 1200);
+	addLaser(9, 13, "U", 1200, 480, 0);
+	addLaser(10, 1, "D", 1200, 540, 0);
+	levelText.setText("8-F");
+}
+
+function W9L1() {
+    let map = [
+        "####################",
+        "#...#....#....#....#",
+        "#...#....#....#....#",
+        "#...#....#....#....#",
+        "#...#..............#",
+        "#...#..............#",
+        "#...###......####..#",
+        "#P....X......X.T#..D",
+        "#.....####...#######",
+        "#........#.........#",
+        "#........#.........#",
+        "#...#....#....#....#",
+        "#...#....#....#....#",
+        "#...#....#....#..H.#",
+        "####################",
+    ];
+    loadMap(map);
+    addCannon(8, 1, "D", 1500, 3.5, 500);
+    addCannon(10, 13, "U", 1500, 3.5, 1250);
+    addCannon(18, 5, "L", 1800, 3.0, 0);
+    addCannon(18, 9, "L", 1800, 3.0, 900);
+    addCannon(12, 1, "D", 1500, 3.0, 0);
+    levelText.setText("9-1");
+}
+
+function W9L2() {
+    let map = [
+        "####################",
+        "#...X..............#",
+        "#P..X.............H#",
+        "#...XXX............#",
+        "##..##########XXX###",
+        "#....K#....X.......#",
+        "#.....#....X.......#",
+        "#.....#....X.......#",
+        "#.....##...#########",
+        "#.....#.......X....#",
+        "#.....#.......X....#",
+        "#.....#.......X...LD",
+        "#.....#.......X..F.#",
+        "#.....#.......X....#",
+        "####################",
+    ];
+    loadMap(map);
+    addTrackObstacle("X", [{ c: 11, r: 9 }, { c: 11, r: 10 }, { c: 11, r: 11 }, { c: 11, r: 12 }, { c: 11, r: 13 }], 2.6);
+    addLaser(15, 1, "D", 2400, 900, 0);
+    addLaser(4, 5, "D", 2400, 900, 1200);
+    addCannon(18, 1, "L", 1400, 4.0, 0);
+    addCannon(9, 1, "D", 1600, 3.5, 300);
+    addCannon(12, 5, "D", 1600, 3.5, 0);
+    addCannon(18, 9, "L", 1300, 4.5, 0);
+    addCannon(8, 9, "D", 1500, 4.0, 200);
+    addCannon(2, 13, "U", 1700, 4.0, 0);
+    levelText.setText("9-2");
+}
+
+function W9L3() {
+    let map = [
+        "####################",
+        "#......#..........T#",
+        "#P.....#.........F.#",
+        "#......#......K....#",
+        "#......X...........#",
+        "#......#.F.........#",
+        "#......#############",
+        "#......#.......#...#",
+        "#......#.......#...#",
+        "#......#.....F.#...#",
+        "#......X.......#...#",
+        "#......#.......L...D",
+        "#..H...#.......#...#",
+        "#......#....S..#...#",
+        "####################",
+    ];
+    loadMap(map);
+    addTrackObstacle("X", [{ c: 11, r: 8 }, { c: 11, r: 9 }, { c: 11, r: 10 }, { c: 11, r: 11 }, { c: 11, r: 12 }], 2.8);
+    addTrackObstacle("C", [{ c: 9, r: 9 }, { c: 10, r: 9 }, { c: 11, r: 9 }, { c: 12, r: 9 }, { c: 13, r: 9 }, { c: 14, r: 9 }], 2.4);
+    addTrackObstacle("C", [{ c: 9, r: 3 }, { c: 10, r: 3 }, { c: 11, r: 3 }, { c: 12, r: 3 }, { c: 13, r: 3 }, { c: 14, r: 3 }, { c: 15, r: 3 }, { c: 16, r: 3 }], 3.0);
+    addLaser(4, 1, "D", 2400, 900, 0);
+    addLaser(18, 7, "D", 2200, 800, 500);
+    addCannon(18, 2, "L", 1200, 4.5, 0);
+    addCannon(9, 1, "D", 1500, 4.0, 300);
+    addCannon(12, 5, "U", 1500, 4.0, 900);
+    addCannon(16, 1, "D", 1400, 5.0, 0);
+    addCannon(14, 13, "U", 1300, 4.0, 0);
+    addCannon(11, 7, "D", 1300, 4.0, 650);
+    addCannon(8, 12, "R", 1500, 4.5, 200);
+    addCannon(2, 13, "U", 1800, 3.5, 0);
+    levelText.setText("9-3");
+}
+
+function W9L4() {
+    let map = [
+        "####################",
+        "#P.................#",
+        "#..................#",
+        "#..##############..#",
+        "#..#...C...........#",
+        "#..#........C......#",
+        "#..#..##############",
+        "#..#....C..........#",
+        "#..#...............#",
+        "#################..#",
+        "#..........C.......#",
+        "D....C...........H.#",
+        "####################",
+        "####################",
+        "####################",
+    ];
+    loadMap(map);
+    addTrackObstacle("C", [{ c: 4, r: 8 }, { c: 5, r: 8 }, { c: 6, r: 8 }, { c: 7, r: 8 }, { c: 8, r: 8 }, { c: 9, r: 8 }, { c: 10, r: 8 }, { c: 11, r: 8 }, { c: 12, r: 8 }, { c: 13, r: 8 }, { c: 14, r: 8 }, { c: 15, r: 8 }], 2.4);
+    addTrackObstacle("X", [{ c: 9, r: 1 }, { c: 9, r: 2 }], 1.2);
+    addLaser(17, 2, "L", 2600, 900, 500);
+    addCannon(10, 1, "D", 1400, 3.5, 0);
+    addCannon(1, 4, "R", 1300, 4.5, 0);
+    addCannon(9, 5, "U", 1500, 4.0, 400);
+    addCannon(16, 4, "D", 1500, 4.0, 900);
+    addCannon(18, 7, "L", 1200, 5.0, 0);
+    addCannon(12, 7, "D", 1400, 4.0, 800);
+    addCannon(1, 10, "R", 1100, 5.0, 0);
+    addCannon(8, 11, "U", 1500, 4.0, 600);
+    addCannon(14, 10, "D", 1500, 4.0, 1000);
+    levelText.setText("9-4");
+}
+
+function W9L5() {
+    let map = [
+        "####################",
+        "#K...#........#...F#",
+        "#....X........X....#",
+        "#....X........X....#",
+        "#....X........X....#",
+        "#....X........X....#",
+        "#....X........X....#",
+        "#P...X........X...LD",
+        "#....X........X....#",
+        "#....X........X....#",
+        "#....X........X....#",
+        "#....X........X....#",
+        "#....X........X.H..#",
+        "#F...#........#....#",
+        "####################",
+    ];
+    loadMap(map);
+    addTrackObstacle("X", [{ c: 7, r: 5 }, { c: 8, r: 5 }, { c: 9, r: 5 }, { c: 10, r: 5 }, { c: 11, r: 5 }, { c: 12, r: 5 }], 3.0);
+    addTrackObstacle("X", [{ c: 12, r: 9 }, { c: 11, r: 9 }, { c: 10, r: 9 }, { c: 9, r: 9 }, { c: 8, r: 9 }, { c: 7, r: 9 }], 3.0);
+    addTrackObstacle("C", [{ c: 10, r: 12 }, { c: 10, r: 11 }, { c: 10, r: 10 }, { c: 10, r: 9 }, { c: 10, r: 8 }, { c: 10, r: 7 }, { c: 10, r: 6 }, { c: 10, r: 5 }, { c: 10, r: 4 }, { c: 10, r: 3 }, { c: 10, r: 2 }], 2.6);
+    addTrackObstacle("C", [{ c: 9, r: 2 }, { c: 9, r: 3 }, { c: 9, r: 4 }, { c: 9, r: 5 }, { c: 9, r: 6 }, { c: 9, r: 7 }, { c: 9, r: 8 }, { c: 9, r: 9 }, { c: 9, r: 10 }, { c: 9, r: 11 }, { c: 9, r: 12 }], 2.6);
+    addTrackObstacle("C", [{ c: 2, r: 3 }, { c: 3, r: 3 }, { c: 4, r: 3 }, { c: 5, r: 3 }, { c: 6, r: 3 }, { c: 7, r: 3 }, { c: 8, r: 3 }, { c: 9, r: 3 }, { c: 10, r: 3 }, { c: 11, r: 3 }, { c: 12, r: 3 }, { c: 13, r: 3 }, { c: 14, r: 3 }, { c: 15, r: 3 }, { c: 16, r: 3 }, { c: 17, r: 3 }, { c: 17, r: 4 }, { c: 17, r: 5 }, { c: 17, r: 6 }, { c: 17, r: 7 }, { c: 17, r: 8 }, { c: 17, r: 9 }, { c: 17, r: 10 }, { c: 17, r: 11 }, { c: 16, r: 11 }, { c: 15, r: 11 }, { c: 14, r: 11 }, { c: 13, r: 11 }, { c: 12, r: 11 }, { c: 11, r: 11 }, { c: 10, r: 11 }, { c: 9, r: 11 }, { c: 8, r: 11 }, { c: 7, r: 11 }, { c: 6, r: 11 }, { c: 5, r: 11 }, { c: 4, r: 11 }, { c: 3, r: 11 }, { c: 2, r: 11 }, { c: 2, r: 10 }, { c: 2, r: 9 }, { c: 2, r: 8 }, { c: 2, r: 7 }, { c: 2, r: 6 }, { c: 2, r: 5 }, { c: 2, r: 4 }, { c: 2, r: 3 }], 2.6);
+    addTrackObstacle("C", [{ c: 3, r: 4 }, { c: 3, r: 5 }, { c: 3, r: 6 }, { c: 3, r: 7 }, { c: 3, r: 8 }, { c: 3, r: 9 }, { c: 3, r: 10 }, { c: 4, r: 10 }, { c: 5, r: 10 }, { c: 6, r: 10 }, { c: 7, r: 10 }, { c: 8, r: 10 }, { c: 9, r: 10 }, { c: 10, r: 10 }, { c: 11, r: 10 }, { c: 12, r: 10 }, { c: 13, r: 10 }, { c: 14, r: 10 }, { c: 15, r: 10 }, { c: 16, r: 10 }, { c: 16, r: 9 }, { c: 16, r: 8 }, { c: 16, r: 7 }, { c: 16, r: 6 }, { c: 16, r: 5 }, { c: 16, r: 4 }, { c: 15, r: 4 }, { c: 14, r: 4 }, { c: 13, r: 4 }, { c: 12, r: 4 }, { c: 11, r: 4 }, { c: 10, r: 4 }, { c: 9, r: 4 }, { c: 8, r: 4 }, { c: 7, r: 4 }, { c: 6, r: 4 }, { c: 5, r: 4 }, { c: 4, r: 4 }, { c: 3, r: 4 }], 2.6);
+    addCannon(8, 13, "U", 1700, 4.0, 0);
+    addCannon(11, 1, "D", 1700, 4.0, 0);
+    levelText.setText("9-5");
+}
+
+function W9L6() {
+    let map = [
+        "####################",
+        "#.H#...............#",
+        "#..#...............#",
+        "#XX###########X###.#",
+        "#..X............#..#",
+        "#..X............#S.#",
+        "#..X............#..#",
+        "#P.#######XX#####..#",
+        "#..X............#..#",
+        "#..X............#..#",
+        "#..X............#..#",
+        "#..####X#########..#",
+        "#...............#..D",
+        "#...........T...#..#",
+        "####################",
+    ];
+    loadMap(map);
+    addHazardWall(0.4);
+    addTrackObstacle("X", [{ c: 6, r: 5 }, { c: 7, r: 5 }, { c: 8, r: 5 }, { c: 9, r: 5 }, { c: 10, r: 5 }, { c: 11, r: 5 }, { c: 12, r: 5 }, { c: 13, r: 5 }, { c: 14, r: 5 }, { c: 15, r: 5 }], 3.0);
+    addTrackObstacle("C", [{ c: 16, r: 9 }, { c: 15, r: 9 }, { c: 14, r: 9 }, { c: 13, r: 9 }, { c: 12, r: 9 }, { c: 11, r: 9 }, { c: 10, r: 9 }, { c: 9, r: 9 }, { c: 8, r: 9 }, { c: 7, r: 9 }, { c: 6, r: 9 }, { c: 5, r: 9 }, { c: 4, r: 9 }, { c: 3, r: 9 }], 3.0);
+    addLaser(16, 1, "L", 2200, 800, 0);
+    addLaser(18, 13, "U", 2200, 990, 0);
+    addCannon(12, 6, "U", 1300, 4.0, 400);
+    addCannon(8, 4, "D", 1300, 4.0, 900);
+    addCannon(7, 8, "D", 1300, 4.0, 0);
+    addCannon(14, 10, "U", 1300, 4.0, 650);
+    addCannon(3, 12, "R", 1200, 5.0, 200);
+    addCannon(10, 12, "U", 1400, 4.5, 700);
+    levelText.setText("9-6");
+}
+
+function W9L7() {
+    let map = [
+        "####################",
+        "#.....#..K...#..#..#",
+        "#.....#......#..#..#",
+        "#..F..#.........#F.#",
+        "#.....#......#..#..#",
+        "#.....#......#..#..#",
+        "#.....#......#..#..#",
+        "#P........F..#..L..D",
+        "#.....#......#..#..#",
+        "#.....#......#..#..#",
+        "#.....#......#..#..#",
+        "#..F..#.........#F.#",
+        "#.....#......#..#..#",
+        "#.S...#.H....#..#..#",
+        "####################",
+    ];
+    loadMap(map);
+    addTrackObstacle("C", [{ c: 7, r: 3 }, { c: 8, r: 3 }, { c: 9, r: 3 }, { c: 10, r: 3 }, { c: 11, r: 3 }, { c: 12, r: 3 }], 3.0);
+    addTrackObstacle("C", [{ c: 12, r: 11 }, { c: 11, r: 11 }, { c: 10, r: 11 }, { c: 9, r: 11 }, { c: 8, r: 11 }, { c: 7, r: 11 }], 3.0);
+    addTrackObstacle("X", [{ c: 8, r: 5 }, { c: 8, r: 6 }, { c: 8, r: 7 }, { c: 8, r: 8 }, { c: 8, r: 9 }], 2.8);
+    addTrackObstacle("X", [{ c: 11, r: 9 }, { c: 11, r: 8 }, { c: 11, r: 7 }, { c: 11, r: 6 }, { c: 11, r: 5 }], 2.6);
+    addLaser(3, 1, "D", 2000, 800, 0);
+	addLaser(4, 13, "U", 2000, 800, 1000);
+	addLaser(17, 1, "D", 1800, 700, 500);
+	addLaser(17, 13, "U", 1800, 700, 1400);
+	addCannon(1, 1, "R", 1300, 4.5, 0);
+	addCannon(1, 13, "R", 1300, 4.5, 650);
+	addCannon(12, 1, "D", 1200, 5.0, 0);
+	addCannon(14, 13, "U", 1300, 4.5, 950);
+	addCannon(18, 1, "D", 1400, 5.5, 200);
+	addCannon(18, 13, "U", 1400, 5.5, 900);
+	levelText.setText("9-7");
+}
+
+function W9L8() {
+	let map = [
+		"####################",
+		"#.................T#",
+		"#..................#",
+		"#...#XXX#...#XXX#..#",
+		"#.......X.......X..#",
+		"#...#...#...#...#..#",
+		"#...X.......X...X..#",
+		"#P.####.....X####..D",
+		"#...X.......X...X..#",
+		"#...#...#...#...#..#",
+		"#.......X.......X..#",
+		"#...#XXX#...#XXX#..#",
+		"#..................#",
+		"#.H......H.........#",
+		"####################",
+	];
+	loadMap(map);
+	addHazardWall(0.4);
+	addTrackObstacle("X", [{ c: 3, r: 2 }, { c: 4, r: 2 }, { c: 5, r: 2 }, { c: 6, r: 2 }, { c: 7, r: 2 }, { c: 8, r: 2 }, { c: 9, r: 2 }, { c: 10, r: 2 }, { c: 11, r: 2 }, { c: 12, r: 2 }, { c: 13, r: 2 }, { c: 14, r: 2 }, { c: 15, r: 2 }, { c: 16, r: 2 }, { c: 17, r: 2 }], 3.5);
+	addTrackObstacle("X", [{ c: 17, r: 12 }, { c: 16, r: 12 }, { c: 15, r: 12 }, { c: 14, r: 12 }, { c: 13, r: 12 }, { c: 12, r: 12 }, { c: 11, r: 12 }, { c: 10, r: 12 }, { c: 9, r: 12 }, { c: 8, r: 12 }, { c: 7, r: 12 }, { c: 6, r: 12 }, { c: 5, r: 12 }, { c: 4, r: 12 }, { c: 3, r: 12 }], 3.5);
+	addTrackObstacle("X", [{ c: 9, r: 11 }, { c: 10, r: 11 }, { c: 11, r: 11 }, { c: 11, r: 10 }, { c: 11, r: 9 }, { c: 11, r: 8 }, { c: 11, r: 7 }, { c: 11, r: 6 }, { c: 11, r: 5 }, { c: 11, r: 4 }, { c: 11, r: 3 }, { c: 10, r: 3 }, { c: 9, r: 3 }, { c: 9, r: 4 }, { c: 9, r: 5 }, { c: 9, r: 6 }, { c: 9, r: 7 }, { c: 9, r: 8 }, { c: 9, r: 9 }, { c: 9, r: 10 }, { c: 9, r: 11 }], 2.6);
+	addLaser(8, 1, "D", 2000, 700, 0);
+	addLaser(12, 13, "U", 2000, 700, 1000);
+	addCannon(2, 1, "R", 1000, 6.0, 0);
+	addCannon(2, 13, "R", 1000, 6.0, 500);
+	addCannon(18, 2, "L", 1000, 6.0, 250);
+	addCannon(18, 12, "L", 1000, 6.0, 750);
+	addCannon(6, 1, "D", 1100, 5.0, 0);
+	addCannon(10, 1, "D", 1100, 5.0, 550);
+	addCannon(10, 13, "U", 1100, 5.0, 825);
+	addCannon(14, 13, "U", 1100, 5.0, 100);
+	levelText.setText("9-8");
+}
+
+function W9L9() {
+	let map = [
+		"XXXXXXXXXXXXXXXXXXXX",
+		"X....#....#....#...X",
+		"X....#......F..#...X",
+		"X....#....#....#.K.X",
+		"X.........#....#...X",
+		"XXXXX#....#....#...X",
+		"X....#....#....#...X",
+		"XP...#.........X.HLD",
+		"X....#....#....#...X",
+		"XXXXX#....#....#...X",
+		"X.........#....#...X",
+		"X....#.S..#....#.F.X",
+		"X....#......F..#...X",
+		"X....#....#....#...X",
+		"XXXXXXXXXXXXXXXXXXXX",
+	];
+	loadMap(map);
+	addHazardWall(0.35);
+	addTrackObstacle("X", [{ c: 9, r: 11 }, { c: 8, r: 11 }, { c: 7, r: 11 }, { c: 6, r: 11 }], 3.2);
+	addTrackObstacle("C", [{ c: 11, r: 5 }, { c: 12, r: 5 }, { c: 13, r: 5 }, { c: 14, r: 5 }, { c: 14, r: 6 }, { c: 14, r: 7 }, { c: 14, r: 8 }, { c: 14, r: 9 }, { c: 13, r: 9 }, { c: 12, r: 9 }, { c: 11, r: 9 }, { c: 11, r: 8 }, { c: 11, r: 7 }, { c: 11, r: 6 }, { c: 11, r: 5 }], 3.2);
+	addTrackObstacle("C", [{ c: 16, r: 2 }, { c: 16, r: 3 }, { c: 16, r: 4 }, { c: 16, r: 5 }, { c: 16, r: 6 }, { c: 16, r: 7 }, { c: 16, r: 8 }, { c: 16, r: 9 }, { c: 16, r: 10 }, { c: 16, r: 11 }, { c: 16, r: 12 }], 3.0);
+	addTrackObstacle("X", [{ c: 6, r: 3 }, { c: 7, r: 3 }, { c: 8, r: 3 }, { c: 9, r: 3 }], 2.6);
+	addLaser(12, 3, "D", 1600, 600, 0);
+	addLaser(17, 13, "U", 2500, 942, 0);
+	addCannon(4, 5, "D", 1100, 5.0, 0);
+	addCannon(4, 9, "U", 1100, 5.0, 550);
+	addCannon(6, 13, "U", 1100, 5.0, 0);
+	addCannon(9, 1, "D", 1100, 5.0, 600);
+	addCannon(11, 4, "R", 1100, 6.0, 0);
+	addCannon(14, 6, "L", 1100, 6.0, 550);
+	addCannon(11, 10, "R", 1100, 6.0, 275);
+	addCannon(14, 8, "L", 1100, 6.0, 825);
+	levelText.setText("9-F");
 }
 
 main();
